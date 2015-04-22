@@ -60,6 +60,14 @@
 
 /* Backport some stuff. FIXME: I dont know when these entered 
    the kernel exactly. */
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(3,14,0)
+
+static inline u32 reciprocal_scale(u32 val, u32 ep_ro)
+{
+	return (u32)(((u64) val * ep_ro) >> 32);
+}
+
+#endif
 
 #if LINUX_VERSION_CODE <= KERNEL_VERSION(3,16,0)
 static inline void qdisc_qstats_backlog_dec(struct Qdisc *sch,
