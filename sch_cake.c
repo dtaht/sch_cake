@@ -48,9 +48,9 @@
 #include <linux/slab.h>
 #include <linux/vmalloc.h>
 #include <net/netlink.h>
-#include <net/pkt_sched.h>
+#include "pkt_sched.h"
 #include <net/flow_keys.h>
-#include <net/codel5.h>
+#include "codel5.h"
 
 /* The CAKE Principle:
  *                 (or, how to have your cake and eat it too)
