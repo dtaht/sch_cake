@@ -854,15 +854,17 @@ static void cake_config_diffserv4(struct Qdisc *sch)
 	cake_set_rate(&q->classes[2], rate - (rate >> 2), mtu, MS2TIME(5), MS2TIME(100));
 	cake_set_rate(&q->classes[3], rate >> 2,          mtu, MS2TIME(5), MS2TIME(100));
 
-	q->classes[0].class_quantum_prio = quantum >> 2;
+	/* priority weights */
+	q->classes[0].class_quantum_prio = quantum >> 4;
 	q->classes[1].class_quantum_prio = quantum;
 	q->classes[2].class_quantum_prio = quantum << 2;
 	q->classes[3].class_quantum_prio = quantum << 4;
 
-	q->classes[0].class_quantum_band = (quantum >> 2);
-	q->classes[1].class_quantum_band = (quantum >> 2) - (quantum >> 6);
-	q->classes[2].class_quantum_band = (quantum >> 2) - (quantum >> 4);
-	q->classes[3].class_quantum_band = (quantum >> 4);
+	/* bandwidth-sharing weights */
+	q->classes[0].class_quantum_band = (quantum >> 4);
+	q->classes[1].class_quantum_band = (quantum >> 3) + (quantum >> 4);
+	q->classes[2].class_quantum_band = (quantum >> 1);
+	q->classes[3].class_quantum_band = (quantum >> 2);
 }
 
 static void cake_reconfigure(struct Qdisc *sch)
