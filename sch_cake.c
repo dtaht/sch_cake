@@ -859,6 +859,7 @@ static void cake_config_diffserv4(struct Qdisc *sch)
 	q->classes[1].class_quantum_prio = quantum;
 	q->classes[2].class_quantum_prio = quantum << 2;
 	q->classes[3].class_quantum_prio = quantum << 4;
+
 	/* bandwidth-sharing weights */
 	q->classes[0].class_quantum_band = (quantum >> 4);
 	q->classes[1].class_quantum_band = (quantum >> 3) + (quantum >> 4);
