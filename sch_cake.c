@@ -47,6 +47,7 @@
 #include <linux/jhash.h>
 #include <linux/slab.h>
 #include <linux/vmalloc.h>
+#include <linux/reciprocal_div.h>
 #include <net/netlink.h>
 #include "pkt_sched.h"
 #include <net/flow_keys.h>
@@ -166,6 +167,7 @@ struct cake_sched_data {
 	int		rate_shft;
 	u32		rate_bps;
 	u16		rate_flags;
+	short	rate_overhead;
 
 	/* resource tracking */
 	u32		buffer_used;
@@ -294,9 +296,17 @@ flow_queue_add(struct cake_fqcd_flow *flow, struct sk_buff *skb)
     skb->next = NULL;
 }
 
-static inline u32 cake_quantise(u32 in, u32 net, u32 gross)
+static inline u32 cake_overhead(struct cake_sched_data *q, u32 in)
 {
-	return gross * ((in + net-1) / net);
+	u32 out = in + q->rate_overhead;
+
+	if(q->rate_flags & CAKE_FLAG_ATM) {
+		out += 47;
+		do_div(out, 48);
+		out *= 53;
+	}
+
+	return out;
 }
 
 static inline codel_time_t cake_ewma(codel_time_t avg, codel_time_t sample, int shift)
@@ -562,9 +572,7 @@ retry:
 		flow->cvars.drop_count = 0;
 	}
 
-	len = qdisc_pkt_len(skb);
-	if(q->rate_flags & CAKE_FLAG_ATM)
-		len = cake_quantise(len, 48, 53);
+	len = cake_overhead(q, qdisc_pkt_len(skb));
 
 	flow->deficit       -= len;
 	fqcd->class_deficit -= len;
@@ -593,10 +601,11 @@ static void cake_reset(struct Qdisc *sch)
 }
 
 static const struct nla_policy cake_policy[TCA_CAKE_MAX + 1] = {
-	[TCA_CAKE_BASE_RATE]	 = { .type = NLA_U32 },
+	[TCA_CAKE_BASE_RATE]     = { .type = NLA_U32 },
 	[TCA_CAKE_DIFFSERV_MODE] = { .type = NLA_U32 },
-	[TCA_CAKE_ATM]		 = { .type = NLA_U32 },
-	[TCA_CAKE_FLOW_MODE] = { .type = NLA_U32 },
+	[TCA_CAKE_ATM]           = { .type = NLA_U32 },
+	[TCA_CAKE_FLOW_MODE]     = { .type = NLA_U32 },
+	[TCA_CAKE_OVERHEAD]      = { .type = NLA_U32 },
 };
 
 static void cake_set_rate(struct cake_fqcd_sched_data *fqcd,
@@ -943,6 +952,9 @@ static int cake_change(struct Qdisc *sch, struct nlattr *opt)
 	if(tb[TCA_CAKE_FLOW_MODE])
 		q->flow_mode = nla_get_u32(tb[TCA_CAKE_FLOW_MODE]);
 
+	if(tb[TCA_CAKE_OVERHEAD])
+		q->rate_overhead = nla_get_u32(tb[TCA_CAKE_OVERHEAD]);
+
 	if(q->classes) {
 		sch_tree_lock(sch);
 		cake_reconfigure(sch);
@@ -1065,6 +1077,9 @@ static int cake_dump(struct Qdisc *sch, struct sk_buff *skb)
 		goto nla_put_failure;
 
 	if(nla_put_u32(skb, TCA_CAKE_FLOW_MODE, q->flow_mode))
+		goto nla_put_failure;
+
+	if(nla_put_u32(skb, TCA_CAKE_OVERHEAD, q->rate_overhead))
 		goto nla_put_failure;
 
 	return nla_nest_end(skb, opts);
