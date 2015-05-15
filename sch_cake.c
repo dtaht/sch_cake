@@ -390,6 +390,53 @@ static int cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 	struct cake_fqcd_flow *flow;
 	u32 len = qdisc_pkt_len(skb);
 
+	/*
+	 * We tolerate GSO aggregates if they occupy < 1ms of wire time
+	 * AND we don't need to perform ATM cell-framing.  We're unlikely
+	 * to need the latter above 24Mbps (best ADSL downlink), where
+	 * handling individual packets is still cheap.
+	 *
+	 * But if those conditions aren't met, we need to split it.
+	 */
+	if(unlikely(len > (q->rate_bps >> 10) ||
+			(q->rate_flags & CAKE_FLAG_ATM)) &&
+			skb_is_gso(skb))
+	{
+		struct sk_buff *segs, *nskb;
+		netdev_features_t features = netif_skb_features(skb);
+		int ret = NET_XMIT_DROP;
+
+		segs = skb_gso_segment(skb, features & ~NETIF_F_GSO_MASK);
+
+		if (IS_ERR_OR_NULL(segs))
+			return qdisc_reshape_fail(skb, sch);
+
+		while (segs) {
+			nskb = segs->next;
+			segs->next = NULL;
+			qdisc_skb_cb(segs)->pkt_len = segs->len;
+
+			switch(cake_enqueue(segs, sch)) {
+				case NET_XMIT_CN:
+					ret = NET_XMIT_CN;
+					/* fall */
+
+				case NET_XMIT_SUCCESS:
+					if(ret == NET_XMIT_DROP)
+						ret = NET_XMIT_SUCCESS;
+					qdisc_tree_decrease_qlen(sch, -1);
+					/* fall */
+
+				default:;
+			}
+			segs = nskb;
+		}
+
+		qdisc_tree_decrease_qlen(sch, 1);
+		consume_skb(skb);
+		return ret;
+	}
+
 	/* extract the Diffserv Precedence field, if it exists */
 	cls = q->class_index[cake_get_diffserv(skb)];
 	if(unlikely(cls >= q->class_cnt))
@@ -558,7 +605,7 @@ retry:
 	flow->dropped        += flow->cvars.ecn_mark   - prev_ecn_mark;
 
 	if(!skb) {
-		/* codel dropped our packet; try again */
+		/* codel dropped our packet and this queue is empty; try again */
 		if((head == &fqcd->new_flows) && !list_empty(&fqcd->old_flows))
 			list_move_tail(&flow->flowchain, &fqcd->old_flows);
 		else
