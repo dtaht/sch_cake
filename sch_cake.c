@@ -401,11 +401,22 @@ static int cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 	idx = cake_fqcd_hash(fqcd, skb, q->flow_mode);
 	flow = &fqcd->flows[idx];
 
+	/* ensure shaper state isn't stale */
+	if(!fqcd->class_backlog) {
+		u64 now = ktime_get_ns();
+		if(fqcd->class_time_next_packet < now)
+			fqcd->class_time_next_packet = now;
+
+		if(!sch->q.qlen)
+			if(q->time_next_packet < now)
+				q->time_next_packet = now;
+	}
+
 	/*
 	 * Split GSO aggregates if they're likely to impair flow isolation
 	 * or if we need to know individual packet sizes for framing overhead.
 	 */
-	if(unlikely((len * fqcd->flow_count) > q->peel_threshold && skb_is_gso(skb)))
+	if(unlikely((len * max(fqcd->flow_count, 1)) > q->peel_threshold && skb_is_gso(skb)))
 	{
 		struct sk_buff *segs, *nskb;
 		netdev_features_t features = netif_skb_features(skb);
@@ -450,17 +461,6 @@ static int cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 		fqcd->class_backlog += len;
 		sch->qstats.backlog += len;
 		q->buffer_used      += skb->truesize;
-	}
-
-	/* ensure shaper state isn't stale */
-	if(!fqcd->class_backlog) {
-		u64 now = ktime_get_ns();
-		if(fqcd->class_time_next_packet < now)
-			fqcd->class_time_next_packet = now;
-
-		if(!sch->q.qlen)
-			if(q->time_next_packet < now)
-				q->time_next_packet = now;
 	}
 
 	/* flowchain */
