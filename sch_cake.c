@@ -390,6 +390,16 @@ static int cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 	struct cake_fqcd_flow *flow;
 	u32 len = qdisc_pkt_len(skb);
 
+	/* extract the Diffserv Precedence field, if it exists */
+	cls = q->class_index[cake_get_diffserv(skb)];
+	if(unlikely(cls >= q->class_cnt))
+		cls = 0;
+	fqcd = &q->classes[cls];
+
+	/* choose flow to insert into */
+	idx = cake_fqcd_hash(fqcd, skb, q->flow_mode);
+	flow = &fqcd->flows[idx];
+
 	/*
 	 * We tolerate GSO aggregates if they occupy < 1ms of wire time
 	 * AND we don't need to perform ATM cell-framing.  We're unlikely
@@ -416,39 +426,20 @@ static int cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 			segs->next = NULL;
 			qdisc_skb_cb(segs)->pkt_len = segs->len;
 
-			switch(cake_enqueue(segs, sch)) {
-				case NET_XMIT_CN:
-					ret = NET_XMIT_CN;
-					/* fall */
+			codel_set_enqueue_time(segs);
+			flow_queue_add(flow, segs);
 
-				case NET_XMIT_SUCCESS:
-					if(ret == NET_XMIT_DROP)
-						ret = NET_XMIT_SUCCESS;
-					qdisc_tree_decrease_qlen(sch, -1);
-					/* fall */
-
-				default:;
-			}
 			segs = nskb;
 		}
 
 		qdisc_tree_decrease_qlen(sch, 1);
 		consume_skb(skb);
 		return ret;
+	} else {
+		/* not splitting */
+		codel_set_enqueue_time(skb);
+		flow_queue_add(flow, skb);
 	}
-
-	/* extract the Diffserv Precedence field, if it exists */
-	cls = q->class_index[cake_get_diffserv(skb)];
-	if(unlikely(cls >= q->class_cnt))
-		cls = 0;
-	fqcd = &q->classes[cls];
-
-	/* choose flow to insert into, and do so */
-	idx = cake_fqcd_hash(fqcd, skb, q->flow_mode);
-
-	codel_set_enqueue_time(skb);
-	flow = &fqcd->flows[idx];
-	flow_queue_add(flow, skb);
 
 	/* ensure shaper state isn't stale */
 	if(!fqcd->class_backlog) {
