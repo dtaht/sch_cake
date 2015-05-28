@@ -121,7 +121,7 @@ struct cake_fqcd_sched_data {
 
     struct codel_params cparams;
     u32     drop_overlimit;
-    u32     new_flow_count;
+    u32     flow_count;
 
     struct list_head new_flows; /* list of new flows */
     struct list_head old_flows; /* list of old flows */
@@ -409,11 +409,10 @@ static int cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 	 *
 	 * But if those conditions aren't met, we need to split it.
 	 */
-	if(unlikely(len > q->peel_threshold && skb_is_gso(skb)))
+	if(unlikely((len * fqcd->flow_count) > q->peel_threshold && skb_is_gso(skb)))
 	{
 		struct sk_buff *segs, *nskb;
 		netdev_features_t features = netif_skb_features(skb);
-		int ret = NET_XMIT_DROP;
 
 		segs = skb_gso_segment(skb, features & ~NETIF_F_GSO_MASK);
 
@@ -428,16 +427,33 @@ static int cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 			codel_set_enqueue_time(segs);
 			flow_queue_add(flow, segs);
 
+			/* stats */
+			sch->q.qlen++;
+			fqcd->packets++;
+			fqcd->bytes         += segs->len;
+			fqcd->backlogs[idx] += segs->len;
+			fqcd->class_backlog += segs->len;
+			sch->qstats.backlog += segs->len;
+			q->buffer_used      += segs->truesize;
+
 			segs = nskb;
 		}
 
 		qdisc_tree_decrease_qlen(sch, 1);
 		consume_skb(skb);
-		return ret;
 	} else {
 		/* not splitting */
 		codel_set_enqueue_time(skb);
 		flow_queue_add(flow, skb);
+
+		/* stats */
+		sch->q.qlen++;
+		fqcd->packets++;
+		fqcd->bytes         += len;
+		fqcd->backlogs[idx] += len;
+		fqcd->class_backlog += len;
+		sch->qstats.backlog += len;
+		q->buffer_used      += skb->truesize;
 	}
 
 	/* ensure shaper state isn't stale */
@@ -451,22 +467,13 @@ static int cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 				q->time_next_packet = now;
 	}
 
-	/* stats */
-	fqcd->packets++;
-	fqcd->bytes         += len;
-	fqcd->backlogs[idx] += len;
-	fqcd->class_backlog += len;
-	sch->qstats.backlog += len;
-	q->buffer_used      += skb->truesize;
-
 	/* flowchain */
 	if(list_empty(&flow->flowchain)) {
 		list_add_tail(&flow->flowchain, &fqcd->new_flows);
-		fqcd->new_flow_count++;
+		fqcd->flow_count++;
 		flow->deficit = fqcd->quantum;
 		flow->dropped = 0;
 	}
-	sch->q.qlen++;
 
 	if(q->buffer_used <= q->buffer_limit) {
 		return NET_XMIT_SUCCESS;
@@ -596,10 +603,12 @@ retry:
 
 	if(!skb) {
 		/* codel dropped our packet and this queue is empty; try again */
-		if((head == &fqcd->new_flows) && !list_empty(&fqcd->old_flows))
+		if((head == &fqcd->new_flows) && !list_empty(&fqcd->old_flows)) {
 			list_move_tail(&flow->flowchain, &fqcd->old_flows);
-		else
+		} else {
 			list_del_init(&flow->flowchain);
+			fqcd->flow_count--;
+		}
 		goto begin;
 	}
 
