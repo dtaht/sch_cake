@@ -164,7 +164,8 @@ struct cake_sched_data {
 	/* time_next = time_this + ((len * rate_ns) >> rate_shft) */
 	u64		time_next_packet;
 	u32		rate_ns;
-	int		rate_shft;
+	u16		rate_shft;
+	u16		peel_threshold;
 	u32		rate_bps;
 	u16		rate_flags;
 	short	rate_overhead;
@@ -408,9 +409,7 @@ static int cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 	 *
 	 * But if those conditions aren't met, we need to split it.
 	 */
-	if(unlikely(len > (q->rate_bps >> 10) ||
-			(q->rate_flags & CAKE_FLAG_ATM)) &&
-			skb_is_gso(skb))
+	if(unlikely(len > q->peel_threshold && skb_is_gso(skb)))
 	{
 		struct sk_buff *segs, *nskb;
 		netdev_features_t features = netif_skb_features(skb);
@@ -953,8 +952,11 @@ static void cake_reconfigure(struct Qdisc *sch)
 
 		if(q->buffer_limit < 65536)
 			q->buffer_limit = 65536;
+		
+		q->peel_threshold = (q->rate_flags & CAKE_FLAG_ATM) ? 0 : q->rate_bps >> 10;
 	} else {
 		q->buffer_limit = 1 << 20;
+		q->peel_threshold = 0;
 	}
 
 	if(q->buffer_limit > sch->limit * psched_mtu(qdisc_dev(sch)))
