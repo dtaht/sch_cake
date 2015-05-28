@@ -402,12 +402,8 @@ static int cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 	flow = &fqcd->flows[idx];
 
 	/*
-	 * We tolerate GSO aggregates if they occupy < 1ms of wire time
-	 * AND we don't need to perform ATM cell-framing.  We're unlikely
-	 * to need the latter above 24Mbps (best ADSL downlink), where
-	 * handling individual packets is still cheap.
-	 *
-	 * But if those conditions aren't met, we need to split it.
+	 * Split GSO aggregates if they're likely to impair flow isolation
+	 * or if we need to know individual packet sizes for framing overhead.
 	 */
 	if(unlikely((len * fqcd->flow_count) > q->peel_threshold && skb_is_gso(skb)))
 	{
@@ -593,8 +589,9 @@ retry:
 	prev_drop_count = flow->cvars.drop_count;
 	prev_ecn_mark   = flow->cvars.ecn_mark;
 
-	skb = codel_dequeue(sch, &flow->cvars, fqcd->cparams.interval, fqcd->cparams.target,
-						q->buffer_used > (q->buffer_limit >> 2) + (q->buffer_limit >> 1));
+	skb = codel_dequeue(sch, &flow->cvars,
+	                    fqcd->cparams.interval, fqcd->cparams.target, fqcd->cparams.threshold,
+	                    q->buffer_used > (q->buffer_limit >> 2) + (q->buffer_limit >> 1));
 
 	fqcd->class_dropped  += flow->cvars.drop_count - prev_drop_count;
 	fqcd->class_ecn_mark += flow->cvars.ecn_mark   - prev_ecn_mark;
@@ -684,14 +681,10 @@ static void cake_set_rate(struct cake_fqcd_sched_data *fqcd,
 	byte_target_ns = (byte_target * rate_ns) >> rate_shft;
 
 	fqcd->cparams.target = max(byte_target_ns, ns_target);
-	fqcd->cparams.interval = max(MS2TIME(100) + fqcd->cparams.target, fqcd->cparams.target * 8);
+	fqcd->cparams.interval = max(MS2TIME(100) + fqcd->cparams.target - ns_target, fqcd->cparams.target * 8);
+	fqcd->cparams.threshold = (fqcd->cparams.target >> 15) * (fqcd->cparams.interval >> 15) * 2;
 
-	if(rate == 0 || rate > 4000000) {
-		fqcd->quantum = 1514;
-	} else {
-		fqcd->quantum = 300;
-	}
-
+	fqcd->quantum = max(min(rate >> 12, 1514ULL), 300ULL);
 }
 
 static void cake_config_besteffort(struct Qdisc *sch)
