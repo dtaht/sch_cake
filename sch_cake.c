@@ -952,15 +952,14 @@ static void cake_reconfigure(struct Qdisc *sch)
 
 		if(q->buffer_limit < 65536)
 			q->buffer_limit = 65536;
-		
-		q->peel_threshold = (q->rate_flags & CAKE_FLAG_ATM) ? 0 : q->rate_bps >> 10;
+
+		q->peel_threshold = (q->rate_flags & CAKE_FLAG_ATM) ? 0 : min(65535, q->rate_bps >> 10);
 	} else {
 		q->buffer_limit = 1 << 20;
 		q->peel_threshold = 0;
 	}
 
-	if(q->buffer_limit > sch->limit * psched_mtu(qdisc_dev(sch)))
-		q->buffer_limit = sch->limit * psched_mtu(qdisc_dev(sch));
+	q->buffer_limit = min(q->buffer_limit, sch->limit * psched_mtu(qdisc_dev(sch)));
 }
 
 static int cake_change(struct Qdisc *sch, struct nlattr *opt)
