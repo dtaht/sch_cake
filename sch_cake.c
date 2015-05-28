@@ -242,11 +242,11 @@ cake_fqcd_hash(struct cake_fqcd_sched_data *q, const struct sk_buff *skb, int fl
 		// check if any active queue in the set is reserved for this flow
 		// count the empty queues in the set, too
 		for(i=j=0, k=inner_hash; i < CAKE_SET_WAYS; i++, k = (k+1) % CAKE_SET_WAYS) {
-			if(!q->backlogs[outer_hash + k]) {
-				j++;
-			} else if(q->tags[outer_hash + k] == hash) {
+			if(q->tags[outer_hash + k] == hash) {
 				q->way_hits++;
 				goto found;
+			} else if(list_empty(&q->flows[outer_hash + k].flowchain)) {
+				j++;
 			}
 		}
 
@@ -256,7 +256,7 @@ cake_fqcd_hash(struct cake_fqcd_sched_data *q, const struct sk_buff *skb, int fl
 			q->way_misses++;
 
 			for(i=0; i < CAKE_SET_WAYS; i++, k = (k+1) % CAKE_SET_WAYS)
-				if(!q->backlogs[outer_hash + k])
+				if(list_empty(&q->flows[outer_hash + k].flowchain))
 					goto found;
 		} else {
 			// there are no empty queues
