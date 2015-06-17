@@ -340,9 +340,12 @@ static struct sk_buff *codel_dequeue(struct Qdisc *sch,
 			 * that the next drop should happen now,
 			 * hence the while loop.
 			 */
-			vars->count++; /* dont care of possible wrap
-					* since there is no more divide
-					*/
+
+			/* saturating increment */
+			vars->count++;
+			if(!vars->count)
+				vars->count--;
+
 			codel_Newton_step(vars);
 			vars->drop_next = codel_control_law(vars->drop_next,
 							    interval,
