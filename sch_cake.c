@@ -331,7 +331,18 @@ static unsigned int cake_drop(struct Qdisc *sch)
 	/* Queue is full; find the fat flow and drop a packet. */
 	for(j=0; j < CAKE_MAX_CLASSES; j++) {
 		fqcd = &q->classes[j];
-		for(i=0; i < fqcd->flows_cnt; i++) {
+
+		list_for_each_entry(flow, &fqcd->old_flows, flowchain) {
+			i = flow - fqcd->flows;
+			if(fqcd->backlogs[i] > maxbacklog) {
+				maxbacklog = fqcd->backlogs[i];
+				idx = i;
+				cls = j;
+			}
+		}
+
+		list_for_each_entry(flow, &fqcd->new_flows, flowchain) {
+			i = flow - fqcd->flows;
 			if(fqcd->backlogs[i] > maxbacklog) {
 				maxbacklog = fqcd->backlogs[i];
 				idx = i;
