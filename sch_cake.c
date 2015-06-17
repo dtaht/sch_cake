@@ -49,8 +49,11 @@
 #include <linux/vmalloc.h>
 #include <linux/reciprocal_div.h>
 #include <net/netlink.h>
+#include <linux/version.h>
 #include "pkt_sched.h"
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,0,0)
 #include <net/flow_keys.h>
+#endif
 #include "codel5.h"
 
 /* The CAKE Principle:
@@ -205,12 +208,16 @@ enum {
 static inline unsigned int
 cake_fqcd_hash(struct cake_fqcd_sched_data *q, const struct sk_buff *skb, int flow_mode)
 {
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,0,0)
     struct flow_keys keys;
+#endif
     u32 hash, reduced_hash;
 
 	if(unlikely(flow_mode == CAKE_FLOW_NONE || q->flows_cnt < CAKE_SET_WAYS))
 		return 0;
 
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,0,0)
 	skb_flow_dissect(skb, &keys);
 
 	if(flow_mode != CAKE_FLOW_ALL) {
@@ -227,7 +234,9 @@ cake_fqcd_hash(struct cake_fqcd_sched_data *q, const struct sk_buff *skb, int fl
 	hash = jhash_3words((__force u32)keys.dst,
 						(__force u32)keys.src ^ keys.ip_proto,
 						(__force u32)keys.ports, q->perturbation);
-
+#else
+	hash = skb_get_hash_perturb(skb, q->perturbation);
+#endif
 	reduced_hash = reciprocal_scale(hash, q->flows_cnt);
 
 	// set-associative hashing
