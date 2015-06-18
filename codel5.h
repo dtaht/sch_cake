@@ -288,6 +288,8 @@ static bool codel_should_drop(const struct sk_buff *skb,
 		/* went below - stay below for at least interval */
 		vars->first_above_time = 0;
 		return false;
+	} else if (vars->dropping) {
+		return true;
 	}
 
 	if (vars->first_above_time == 0) {
