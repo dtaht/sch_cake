@@ -1175,6 +1175,7 @@ static int cake_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 		st->cls[i].way_indirect_hits = fqcd->way_hits;
 		st->cls[i].way_misses        = fqcd->way_misses;
 		st->cls[i].way_collisions    = fqcd->way_collisions;
+		st->cls[i].active_Flows      = fqcd->flow_count;
 	}
 
 	i = gnet_stats_copy_app(d, st, sizeof(*st));
