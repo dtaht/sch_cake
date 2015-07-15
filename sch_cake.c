@@ -966,7 +966,7 @@ static void cake_reconfigure(struct Qdisc *sch)
 		if(q->buffer_limit < 65536)
 			q->buffer_limit = 65536;
 
-		q->peel_threshold = (q->rate_flags & CAKE_FLAG_ATM) ? 0 : min(65535U, q->rate_bps >> 10);
+		q->peel_threshold = (q->rate_flags & CAKE_FLAG_ATM) ? 0 : min(65535U, q->rate_bps >> 12);
 	} else {
 		q->buffer_limit = 1 << 20;
 		q->peel_threshold = 0;
