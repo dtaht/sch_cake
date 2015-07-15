@@ -121,7 +121,7 @@ struct cake_fqcd_sched_data {
 
     struct codel_params cparams;
     u32      drop_overlimit;
-    u32		low_count;
+    u32		flow_count;
 
     struct list_head new_flows; /* list of new flows */
     struct list_head old_flows; /* list of old flows */
@@ -1175,7 +1175,7 @@ static int cake_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 		st->cls[i].way_indirect_hits = fqcd->way_hits;
 		st->cls[i].way_misses        = fqcd->way_misses;
 		st->cls[i].way_collisions    = fqcd->way_collisions;
-		st->cls[i].active_Flows      = fqcd->flow_count;
+		st->cls[i].active_flows      = fqcd->flow_count;
 	}
 
 	i = gnet_stats_copy_app(d, st, sizeof(*st));
