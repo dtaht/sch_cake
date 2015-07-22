@@ -58,8 +58,8 @@
  * Implemented on linux by Dave Taht and Eric Dumazet
  */
 
-/* Backport some stuff. FIXME: I dont know when these entered
-   the kernel exactly. */
+/* Backport some stuff if needed.
+ */
 #if LINUX_VERSION_CODE <= KERNEL_VERSION(3,14,0)
 
 static inline u32 reciprocal_scale(u32 val, u32 ep_ro)
@@ -69,7 +69,13 @@ static inline u32 reciprocal_scale(u32 val, u32 ep_ro)
 
 #endif
 
-#if LINUX_VERSION_CODE <= KERNEL_VERSION(3,16,0)
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(3,17,0)
+
+#define ktime_get_ns() ktime_to_ns(ktime_get())
+
+#endif
+
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(3,18,0)
 static inline void qdisc_qstats_backlog_dec(struct Qdisc *sch,
                                             const struct sk_buff *skb)
 {
@@ -100,7 +106,6 @@ static inline void kvfree(const void *addr)
     kfree(addr);
 }
 
-#define ktime_get_ns() ktime_to_ns(ktime_get())
 #define codel_stats_copy_queue(a,b,c,d) gnet_stats_copy_queue(a,c)
 #define codel_watchdog_schedule_ns(a,b,c) qdisc_watchdog_schedule_ns(a,b)
 #else
