@@ -1,6 +1,7 @@
 obj-m := sch_cake.o
-IDIR= /lib/modules/$(shell uname -r)/kernel/net/sched/
-KDIR := /lib/modules/$(shell uname -r)/build
+KERNEL_VERSION := $(shell uname -r)
+IDIR := /lib/modules/$(KERNEL_VERSION)/kernel/net/sched/
+KDIR := /lib/modules/$(KERNEL_VERSION)/build
 PWD := $(shell pwd)
 default:
 	$(MAKE) -C $(KDIR) SUBDIRS=$(PWD) modules
