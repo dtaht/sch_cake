@@ -51,7 +51,7 @@
 #include <net/netlink.h>
 #include <linux/version.h>
 #include "pkt_sched.h"
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4,0,0)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,2,0)
 #include <net/flow_keys.h>
 #endif
 #include "codel5.h"
@@ -208,7 +208,7 @@ enum {
 static inline unsigned int
 cake_fqcd_hash(struct cake_fqcd_sched_data *q, const struct sk_buff *skb, int flow_mode)
 {
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,0,0)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,2,0)
     struct flow_keys keys;
 #endif
     u32 hash, reduced_hash;
@@ -217,7 +217,7 @@ cake_fqcd_hash(struct cake_fqcd_sched_data *q, const struct sk_buff *skb, int fl
 		return 0;
 
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,0,0)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,2,0)
 	skb_flow_dissect(skb, &keys);
 
 	if(flow_mode != CAKE_FLOW_ALL) {
@@ -436,7 +436,7 @@ static int cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 	 * Split GSO aggregates if they're likely to impair flow isolation
 	 * or if we need to know individual packet sizes for framing overhead.
 	 */
-	if(unlikely((len * max(fqcd->flow_count, 1) > q->peel_threshold && skb_is_gso(skb))))
+	if(unlikely((len * max(fqcd->flow_count, (u32)1) > q->peel_threshold && skb_is_gso(skb))))
 	{
 		struct sk_buff *segs, *nskb;
 		netdev_features_t features = netif_skb_features(skb);
