@@ -51,8 +51,10 @@
 #include <net/netlink.h>
 #include <linux/version.h>
 #include "pkt_sched.h"
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4,0,0)
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(4,0,0)
 #include <net/flow_keys.h>
+#else
+#include <net/flow_dissector.h>
 #endif
 #include "codel5.h"
 
@@ -201,47 +203,82 @@ enum {
 	CAKE_FLOW_SRC_IP,
 	CAKE_FLOW_DST_IP,
 	CAKE_FLOW_HOSTS,
-	CAKE_FLOW_ALL,
+	CAKE_FLOW_FLOWS,
+	CAKE_FLOW_DUAL_SRC,
+	CAKE_FLOW_DUAL_DST,
+	CAKE_FLOW_DUAL,
 	CAKE_FLOW_MAX
 };
 
 static inline unsigned int
 cake_fqcd_hash(struct cake_fqcd_sched_data *q, const struct sk_buff *skb, int flow_mode)
 {
-#if LINUX_VERSION_CODE <= KERNEL_VERSION(4,0,0)
-    struct flow_keys keys;
-#endif
-    u32 hash, reduced_hash;
+    struct flow_keys keys, host_keys;
+    u32 flow_hash, host_hash, reduced_hash;
 
 	if(unlikely(flow_mode == CAKE_FLOW_NONE || q->flows_cnt < CAKE_SET_WAYS))
 		return 0;
 
-
 #if LINUX_VERSION_CODE <= KERNEL_VERSION(4,0,0)
 	skb_flow_dissect(skb, &keys);
 
-	if(flow_mode != CAKE_FLOW_ALL) {
-		keys.ip_proto = 0;
-		keys.ports = 0;
+	flow_hash = jhash_3words(
+		(__force u32)keys.dst,
+		(__force u32)keys.src ^ keys.ip_proto,
+		(__force u32)keys.ports, q->perturbation);
 
-		if(!(flow_mode & CAKE_FLOW_SRC_IP))
-			keys.src = 0;
+	host_hash = jhash_3words(
+		(__force u32)((flow_mode & CAKE_FLOW_DST_IP) ? keys.dst : 0),
+		(__force u32)((flow_mode & CAKE_FLOW_SRC_IP) ? keys.src : 0),
+		(__force u32) 0, q->perturbation);
+#else
+	skb_flow_dissect_flow_keys(skb, &keys, FLOW_DISSECTOR_F_STOP_AT_FLOW_LABEL);
 
-		if(!(flow_mode & CAKE_FLOW_DST_IP))
-			keys.dst = 0;
+	/* flow_hash_from_keys() sorts the addresses by value, so we have to preserve
+	 * their order in a separate data structure in order to treat src and dst host
+	 * addresses as independently selectable.
+	 */
+	host_keys = keys;
+	host_keys.ports.ports = 0;
+	host_keys.basic.ip_proto = 0;
+	host_keys.keyid = {0};
+	host_keys.tags = {0,0};
+
+	if(!(flow_mode & CAKE_FLOW_SRC_IP)) {
+		switch (host_keys->control.addr_type) {
+		case FLOW_DISSECTOR_KEY_IPV4_ADDRS:
+			host_keys.addrs.v4addrs.src = 0;
+			break;
+
+		case FLOW_DISSECTOR_KEY_IPV6_ADDRS:
+			memset(&host_keys.addrs.v6addrs.src, 0, sizeof(host_keys.addrs.v6addrs.src));
+			break;
+		};
 	}
 
-	hash = jhash_3words((__force u32)keys.dst,
-						(__force u32)keys.src ^ keys.ip_proto,
-						(__force u32)keys.ports, q->perturbation);
-#else
-	hash = skb_get_hash_perturb(skb, q->perturbation);
+	if(!(flow_mode & CAKE_FLOW_DST_IP)) {
+		switch (host_keys->control.addr_type) {
+		case FLOW_DISSECTOR_KEY_IPV4_ADDRS:
+			host_keys.addrs.v4addrs.dst = 0;
+			break;
+
+		case FLOW_DISSECTOR_KEY_IPV6_ADDRS:
+			memset(&host_keys.addrs.v6addrs.dst, 0, sizeof(host_keys.addrs.v6addrs.dst));
+			break;
+		};
+	}
+
+	flow_hash = flow_hash_from_keys(&keys);
+	host_hash = flow_hash_from_keys(&host_keys);
 #endif
-	reduced_hash = reciprocal_scale(hash, q->flows_cnt);
+
+	if(!(flow_mode & CAKE_FLOW_ALL))
+		flow_hash = host_hash;
+	reduced_hash = reciprocal_scale(flow_hash, q->flows_cnt);
 
 	// set-associative hashing
 	// fast path if no hash collision (direct lookup succeeds)
-	if(likely(q->tags[reduced_hash] == hash)) {
+	if(likely(q->tags[reduced_hash] == flow_hash)) {
 		q->way_directs++;
 	} else {
 		u32 inner_hash = reduced_hash % CAKE_SET_WAYS;
@@ -251,7 +288,7 @@ cake_fqcd_hash(struct cake_fqcd_sched_data *q, const struct sk_buff *skb, int fl
 		// check if any active queue in the set is reserved for this flow
 		// count the empty queues in the set, too
 		for(i=j=0, k=inner_hash; i < CAKE_SET_WAYS; i++, k = (k+1) % CAKE_SET_WAYS) {
-			if(q->tags[outer_hash + k] == hash) {
+			if(q->tags[outer_hash + k] == flow_hash) {
 				q->way_hits++;
 				goto found;
 			} else if(list_empty(&q->flows[outer_hash + k].flowchain)) {
@@ -276,7 +313,7 @@ cake_fqcd_hash(struct cake_fqcd_sched_data *q, const struct sk_buff *skb, int fl
 	found:
 		// reserve queue for future packets in same flow
 		reduced_hash = outer_hash + k;
-		q->tags[reduced_hash] = hash;
+		q->tags[reduced_hash] = flow_hash;
 	}
 
 	return reduced_hash;
