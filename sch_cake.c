@@ -51,7 +51,7 @@
 #include <net/netlink.h>
 #include <linux/version.h>
 #include "pkt_sched.h"
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4,0,0)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,2,0)
 #include <net/flow_keys.h>
 #endif
 #include "codel5.h"
@@ -208,7 +208,7 @@ enum {
 static inline unsigned int
 cake_fqcd_hash(struct cake_fqcd_sched_data *q, const struct sk_buff *skb, int flow_mode)
 {
-#if LINUX_VERSION_CODE <= KERNEL_VERSION(4,0,0)
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(4,2,0)
     struct flow_keys keys;
 #endif
     u32 hash, reduced_hash;
@@ -217,7 +217,7 @@ cake_fqcd_hash(struct cake_fqcd_sched_data *q, const struct sk_buff *skb, int fl
 		return 0;
 
 
-#if LINUX_VERSION_CODE <= KERNEL_VERSION(4,0,0)
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(4,2,0)
 	skb_flow_dissect(skb, &keys);
 
 	if(flow_mode != CAKE_FLOW_ALL) {
