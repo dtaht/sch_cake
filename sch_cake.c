@@ -126,7 +126,8 @@ struct cake_fqcd_sched_data {
 
     struct codel_params cparams;
     u32      drop_overlimit;
-    u32		flow_count;
+    u16	     bulk_flow_count;
+    u16	     sparse_flow_count;
 
     struct list_head new_flows; /* list of new flows */
     struct list_head old_flows; /* list of old flows */
@@ -239,13 +240,14 @@ cake_fqcd_hash(struct cake_fqcd_sched_data *q, const struct sk_buff *skb, int fl
 	 * addresses as independently selectable.
 	 */
 	host_keys = keys;
-	host_keys.ports.ports = 0;
-	host_keys.basic.ip_proto = 0;
-	host_keys.keyid = {0};
-	host_keys.tags = {0,0};
+	host_keys.ports.ports     = 0;
+	host_keys.basic.ip_proto  = 0;
+	host_keys.keyid.keyid     = 0;
+	host_keys.tags.vlan_id    = 0;
+	host_keys.tags.flow_label = 0;
 
 	if(!(flow_mode & CAKE_FLOW_SRC_IP)) {
-		switch (host_keys->control.addr_type) {
+		switch (host_keys.control.addr_type) {
 		case FLOW_DISSECTOR_KEY_IPV4_ADDRS:
 			host_keys.addrs.v4addrs.src = 0;
 			break;
@@ -257,7 +259,7 @@ cake_fqcd_hash(struct cake_fqcd_sched_data *q, const struct sk_buff *skb, int fl
 	}
 
 	if(!(flow_mode & CAKE_FLOW_DST_IP)) {
-		switch (host_keys->control.addr_type) {
+		switch (host_keys.control.addr_type) {
 		case FLOW_DISSECTOR_KEY_IPV4_ADDRS:
 			host_keys.addrs.v4addrs.dst = 0;
 			break;
@@ -272,7 +274,7 @@ cake_fqcd_hash(struct cake_fqcd_sched_data *q, const struct sk_buff *skb, int fl
 	host_hash = flow_hash_from_keys(&host_keys);
 #endif
 
-	if(!(flow_mode & CAKE_FLOW_ALL))
+	if(!(flow_mode & CAKE_FLOW_FLOWS))
 		flow_hash = host_hash;
 	reduced_hash = reciprocal_scale(flow_hash, q->flows_cnt);
 
@@ -349,7 +351,7 @@ static inline u32 cake_overhead(struct cake_sched_data *q, u32 in)
 
 	if(q->rate_flags & CAKE_FLAG_ATM) {
 		out += 47;
-		do_div(out, 48);
+		out /= 48;
 		out *= 53;
 	}
 
@@ -473,7 +475,7 @@ static int cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 	 * Split GSO aggregates if they're likely to impair flow isolation
 	 * or if we need to know individual packet sizes for framing overhead.
 	 */
-	if(unlikely((len * max(fqcd->flow_count, 1U) > q->peel_threshold && skb_is_gso(skb))))
+	if(unlikely((len * max((u32) fqcd->bulk_flow_count, 1U) > q->peel_threshold && skb_is_gso(skb))))
 	{
 		struct sk_buff *segs, *nskb;
 		netdev_features_t features = netif_skb_features(skb);
@@ -523,7 +525,7 @@ static int cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 	/* flowchain */
 	if(list_empty(&flow->flowchain)) {
 		list_add_tail(&flow->flowchain, &fqcd->new_flows);
-		fqcd->flow_count+=1;
+		fqcd->sparse_flow_count++;
 		flow->deficit = fqcd->quantum;
 		flow->dropped = 0;
 	}
@@ -640,6 +642,10 @@ retry:
 	if(flow->deficit <= 0) {
 		flow->deficit += fqcd->quantum;
 		list_move_tail(&flow->flowchain, &fqcd->old_flows);
+		if(head == &fqcd->new_flows) {
+			fqcd->sparse_flow_count--;
+			fqcd->bulk_flow_count++;
+		}
 		goto retry;
 	}
 
@@ -656,12 +662,17 @@ retry:
 	flow->dropped        += flow->cvars.ecn_mark   - prev_ecn_mark;
 
 	if(!skb) {
-		/* codel dropped our packet and this queue is empty; try again */
+		/* codel dropped the last packet in this queue; try again */
 		if((head == &fqcd->new_flows) && !list_empty(&fqcd->old_flows)) {
 			list_move_tail(&flow->flowchain, &fqcd->old_flows);
+			fqcd->sparse_flow_count--;
+			fqcd->bulk_flow_count++;
 		} else {
 			list_del_init(&flow->flowchain);
-			fqcd->flow_count-=1;
+			if(head == &fqcd->new_flows)
+				fqcd->sparse_flow_count--;
+			else
+				fqcd->bulk_flow_count--;
 		}
 		goto begin;
 	}
@@ -1103,7 +1114,7 @@ static int cake_init(struct Qdisc *sch, struct nlattr *opt)
 
 	sch->limit = 10240;
 	q->class_mode = CAKE_MODE_DIFFSERV4;
-	q->flow_mode  = CAKE_FLOW_ALL;
+	q->flow_mode  = CAKE_FLOW_FLOWS;
 
 	q->rate_bps = 0; /* unlimited by default */
 
@@ -1129,7 +1140,8 @@ static int cake_init(struct Qdisc *sch, struct nlattr *opt)
 		fqcd->perturbation = prandom_u32();
 		INIT_LIST_HEAD(&fqcd->new_flows);
 		INIT_LIST_HEAD(&fqcd->old_flows);
-		fqcd->flow_count=0;
+		fqcd->sparse_flow_count=0;
+		fqcd->bulk_flow_count=0;
 		/* codel_params_init(&fqcd->cparams); */
 
 		fqcd->flows    = cake_zalloc(fqcd->flows_cnt * sizeof(struct cake_fqcd_flow));
@@ -1221,7 +1233,9 @@ static int cake_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 		st->cls[i].way_indirect_hits = fqcd->way_hits;
 		st->cls[i].way_misses        = fqcd->way_misses;
 		st->cls[i].way_collisions    = fqcd->way_collisions;
-		st->cls[i].active_flows      = fqcd->flow_count;
+
+		st->cls[i].sparse_flows      = fqcd->sparse_flow_count;
+		st->cls[i].bulk_flows        = fqcd->bulk_flow_count;
 	}
 
 	i = gnet_stats_copy_app(d, st, sizeof(*st));

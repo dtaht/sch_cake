@@ -876,7 +876,8 @@ struct tc_cake_xstats {
 		__u32 peak_delay; /* delay to fat flows */
 		__u32 avge_delay;
 		__u32 base_delay; /* delay to sparse flows */
-		__u32 active_flows;
+		__u16 sparse_flows;
+		__u16 bulk_flows;
 	} cls[8];
 };
 
