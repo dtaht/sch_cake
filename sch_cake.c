@@ -51,7 +51,7 @@
 #include <net/netlink.h>
 #include <linux/version.h>
 #include "pkt_sched.h"
-#if LINUX_VERSION_CODE <= KERNEL_VERSION(4,0,0)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,2,0)
 #include <net/flow_keys.h>
 #else
 #include <net/flow_dissector.h>
@@ -220,7 +220,7 @@ cake_fqcd_hash(struct cake_fqcd_sched_data *q, const struct sk_buff *skb, int fl
 	if(unlikely(flow_mode == CAKE_FLOW_NONE || q->flows_cnt < CAKE_SET_WAYS))
 		return 0;
 
-#if LINUX_VERSION_CODE <= KERNEL_VERSION(4,0,0)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,2,0)
 	skb_flow_dissect(skb, &keys);
 
 	flow_hash = jhash_3words(
