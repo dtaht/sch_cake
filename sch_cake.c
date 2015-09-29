@@ -192,6 +192,7 @@ enum {
 	CAKE_MODE_PRECEDENCE,
 	CAKE_MODE_DIFFSERV8,
 	CAKE_MODE_DIFFSERV4,
+	CAKE_MODE_SQUASH,
 	CAKE_MODE_MAX
 };
 
@@ -419,10 +420,21 @@ static unsigned int cake_drop(struct Qdisc *sch)
 	return idx + (cls << 16);
 }
 
+static inline void cake_squash_diffserv(struct sk_buff *skb)
+{
+	switch (skb->protocol) {
+	case htons(ETH_P_IP):
+		ipv4_change_dsfield(ip_hdr(skb), 3, 0);
+		break;
+	case htons(ETH_P_IPV6):
+		ipv6_change_dsfield(ipv6_hdr(skb), 3, 0) ;
+		break;
+	default: break;
+	};
+}
+
 static inline unsigned int cake_get_diffserv(struct sk_buff *skb)
 {
-	/* borrowed from sch_dsmark */
-	/* TODO: consider implementing squashing here */
 	switch (skb->protocol) {
 	case htons(ETH_P_IP):
 		return ipv4_get_dsfield(ip_hdr(skb)) >> 2;
@@ -445,9 +457,15 @@ static int cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 	u32 len = qdisc_pkt_len(skb);
 
 	/* extract the Diffserv Precedence field, if it exists */
-	cls = q->class_index[cake_get_diffserv(skb)];
-	if(unlikely(cls >= q->class_cnt))
-		cls = 0;
+	if(q->class_mode != CAKE_MODE_SQUASH) {
+		cls = q->class_index[cake_get_diffserv(skb)];
+		if(unlikely(cls >= q->class_cnt))
+			cls = 0;
+	} else {
+		cake_squash_diffserv(skb);
+		cls = q->class_index[0];
+	}
+
 	fqcd = &q->classes[cls];
 
 	/* choose flow to insert into */
@@ -983,6 +1001,7 @@ static void cake_reconfigure(struct Qdisc *sch)
 	int c;
 
 	switch(q->class_mode) {
+	case CAKE_MODE_SQUASH:
 	case CAKE_MODE_BESTEFFORT:
 	default:
 		cake_config_besteffort(sch);
