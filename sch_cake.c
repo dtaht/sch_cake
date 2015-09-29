@@ -422,18 +422,12 @@ static unsigned int cake_drop(struct Qdisc *sch)
 static inline unsigned int cake_get_diffserv(struct sk_buff *skb)
 {
 	/* borrowed from sch_dsmark */
+	/* TODO: consider implementing squashing here */
 	switch (skb->protocol) {
 	case htons(ETH_P_IP):
-	  // FIXME: cow is not needed
-	  // if (!pskb_network_may_pull(skb, sizeof(struct iphdr)))
-
-		if (unlikely(skb_cow_head(skb, sizeof(struct iphdr))))
-			return 0;
 		return ipv4_get_dsfield(ip_hdr(skb)) >> 2;
 
 	case htons(ETH_P_IPV6):
-		if (unlikely(skb_cow_head(skb, sizeof(struct ipv6hdr))))
-			return 0;
 		return ipv6_get_dsfield(ipv6_hdr(skb)) >> 2;
 
 	default:
