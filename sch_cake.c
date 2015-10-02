@@ -215,7 +215,11 @@ enum {
 static inline unsigned int
 cake_fqcd_hash(struct cake_fqcd_sched_data *q, const struct sk_buff *skb, int flow_mode)
 {
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,2,0)
+    struct flow_keys keys;
+#else
     struct flow_keys keys, host_keys;
+#endif
     u32 flow_hash, host_hash, reduced_hash;
 
 	if(unlikely(flow_mode == CAKE_FLOW_NONE || q->flows_cnt < CAKE_SET_WAYS))
