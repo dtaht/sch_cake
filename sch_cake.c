@@ -129,6 +129,9 @@ struct cake_fqcd_sched_data {
     u16	     bulk_flow_count;
     u16	     sparse_flow_count;
 
+    u32      last_skblen;
+    u32      max_skblen;
+
     struct list_head new_flows; /* list of new flows */
     struct list_head old_flows; /* list of old flows */
 
@@ -482,6 +485,10 @@ static int cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 			if(q->time_next_packet < now)
 				q->time_next_packet = now;
 	}
+
+	fqcd->last_skblen = skb_headlen(skb);
+	if(unlikely(fqcd->last_skblen > fqcd->max_skblen))
+			fqcd->max_skblen = fqcd->last_skblen;
 
 	/*
 	 * Split GSO aggregates if they're likely to impair flow isolation
@@ -1249,6 +1256,8 @@ static int cake_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 
 		st->cls[i].sparse_flows      = fqcd->sparse_flow_count;
 		st->cls[i].bulk_flows        = fqcd->bulk_flow_count;
+		st->cls[i].last_skblen       = fqcd->last_skblen;
+		st->cls[i].max_skblen        = fqcd->max_skblen;
 	}
 
 	i = gnet_stats_copy_app(d, st, sizeof(*st));
