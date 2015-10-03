@@ -381,8 +381,9 @@ static unsigned int cake_drop(struct Qdisc *sch)
 	struct cake_fqcd_sched_data *fqcd;
 	struct cake_fqcd_flow *flow;
 
-	/* Queue is full; find the fat flow and drop a packet. */
-	for(j=0; j < CAKE_MAX_CLASSES; j++) {
+	/* Queue is full; check across classes in use
+	 * find the fat flow and drop a packet. */
+	for(j=0; j < q->class_cnt; j++) {
 		fqcd = &q->classes[j];
 
 		list_for_each_entry(flow, &fqcd->old_flows, flowchain) {
