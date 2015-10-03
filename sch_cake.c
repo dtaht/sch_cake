@@ -486,7 +486,7 @@ static int cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 				q->time_next_packet = now;
 	}
 
-	fqcd->last_skblen = skb_headlen(skb);
+	fqcd->last_skblen = len;
 	if(unlikely(fqcd->last_skblen > fqcd->max_skblen))
 			fqcd->max_skblen = fqcd->last_skblen;
 
