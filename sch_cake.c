@@ -58,7 +58,7 @@
 #endif
 #include "codel5.h"
 
-/* The CAKE Principle:
+/* The CAKE Principles:
  *                 (or, how to have your cake and eat it too)
  *
  * This is a combination of several shaping, AQM and FQ
@@ -74,9 +74,9 @@
  * - A Diffserv-aware priority queue, giving more priority to
  *   certain classes, up to a specified fraction of bandwidth.
  *   Above that bandwidth threshold, the priority is reduced to
- *   avoid starving other classes.
+ *   avoid starving other bins.
  *
- * - Each priority class has a separate Flow Queue system, to
+ * - Each priority bin has a separate Flow Queue system, to
  *   isolate traffic flows from each other.  This prevents a
  *   burst on one flow from increasing the delay to another.
  *   Flows are distributed to queues using a set-associative
@@ -95,19 +95,20 @@
  * The priority queue operates according to a weighted DRR
  * scheme, combined with a bandwidth tracker which reuses the
  * shaper logic to detect which side of the bandwidth sharing
- * threshold the class is operating.  This determines whether
+ * threshold the bin is operating.  This determines whether
  * a priority-based weight (high) or a bandwidth-based weight
- * (low) is used for that class in the current pass.
+ * (low) is used for that bin in the current pass.
  *
- * This qdisc incorporates much of Eric Dumazet's fq_codel code,
- * customised for use as an integrated subordinate.
- * See sch_fq_codel.c for details of operation.
+ * This qdisc incorporates much of Eric Dumazet's fq_codel code, which
+ * he kindly dual-licensed, which we customised for use as an
+ * integrated subordinate.  See sch_fq_codel.c for details of
+ * operation.
  */
 
 #define CAKE_SET_WAYS (8)
-#define CAKE_MAX_CLASSES (8)
+#define CAKE_MAX_BINS (8)
 
-struct cake_fqcd_flow {
+struct cake_flow {
     struct sk_buff	  *head;
     struct sk_buff	  *tail;
     struct list_head  flowchain;
@@ -116,8 +117,8 @@ struct cake_fqcd_flow {
     struct codel_vars cvars;
 }; /* please try to keep this structure <= 64 bytes */
 
-struct cake_fqcd_sched_data {
-    struct cake_fqcd_flow *flows;    /* Flows table [flows_cnt] */
+struct cake_bin_data {
+    struct cake_flow *flows;    /* Flows table [flows_cnt] */
     u32      *backlogs;  /* backlog table [flows_cnt] */
 	u32		 *tags;		/* for set association [flows_cnt] */
     u32      flows_cnt;  /* number of flows - must be multiple of CAKE_SET_WAYS */
@@ -136,17 +137,17 @@ struct cake_fqcd_sched_data {
     struct list_head old_flows; /* list of old flows */
 
 	/* time_next = time_this + ((len * rate_ns) >> rate_shft) */
-	u64		 class_time_next_packet;
-	u32		 class_rate_ns;
-	int		 class_rate_shft;
-	u32		 class_rate_bps;
+	u64		 bin_time_next_packet;
+	u32		 bin_rate_ns;
+	int		 bin_rate_shft;
+	u32		 bin_rate_bps;
 
-	u16		 class_quantum_prio;
-	u16		 class_quantum_band;
-	int		 class_deficit;
-	u32		 class_backlog;
-	u32		 class_dropped;
-	u32		 class_ecn_mark;
+	u16		 bin_quantum_prio;
+	u16		 bin_quantum_band;
+	int		 bin_deficit;
+	u32		 bin_backlog;
+	u32		 bin_dropped;
+	u32		 bin_ecn_mark;
 
 	u32		 packets;
 	u64		 bytes;
@@ -161,13 +162,13 @@ struct cake_fqcd_sched_data {
 	u32		 way_hits;
 	u32		 way_misses;
 	u32		 way_collisions;
-}; /* number of classes is small, so size of this struct doesn't matter much */
+}; /* number of bins is small, so size of this struct doesn't matter much */
 
 struct cake_sched_data {
-	struct cake_fqcd_sched_data *classes;
-	u16		class_cnt;
-	u16		class_mode;
-	u8		class_index[64];
+	struct cake_bin_data *bins;
+	u16		bin_cnt;
+	u16		bin_mode;
+	u8		bin_index[64];
 	u16		flow_mode;
 
 	/* time_next = time_this + ((len * rate_ns) >> rate_shft) */
@@ -184,7 +185,7 @@ struct cake_sched_data {
 	u32		buffer_limit;
 
 	/* indices for dequeue */
-	u16		cur_class;
+	u16		cur_bin;
 	u16		cur_flow;
 
 	struct qdisc_watchdog watchdog;
@@ -216,7 +217,7 @@ enum {
 };
 
 static inline unsigned int
-cake_fqcd_hash(struct cake_fqcd_sched_data *q, const struct sk_buff *skb, int flow_mode)
+cake_hash(struct cake_bin_data *q, const struct sk_buff *skb, int flow_mode)
 {
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4,2,0)
     struct flow_keys keys;
@@ -286,8 +287,8 @@ cake_fqcd_hash(struct cake_fqcd_sched_data *q, const struct sk_buff *skb, int fl
 		flow_hash = host_hash;
 	reduced_hash = reciprocal_scale(flow_hash, q->flows_cnt);
 
-	// set-associative hashing
-	// fast path if no hash collision (direct lookup succeeds)
+	/* set-associative hashing */
+	/* fast path if no hash collision (direct lookup succeeds) */
 	if(likely(q->tags[reduced_hash] == flow_hash)) {
 		q->way_directs++;
 	} else {
@@ -315,8 +316,10 @@ cake_fqcd_hash(struct cake_fqcd_sched_data *q, const struct sk_buff *skb, int fl
 				if(list_empty(&q->flows[outer_hash + k].flowchain))
 					goto found;
 		} else {
-			// there are no empty queues
-			// just default to the original queue and accept the collision
+			/* 
+			 with no empty queues default to the original
+			 queue and accept the collision
+			 */
 			q->way_collisions++;
 		}
 
@@ -330,9 +333,9 @@ cake_fqcd_hash(struct cake_fqcd_sched_data *q, const struct sk_buff *skb, int fl
 }
 
 /* helper functions : might be changed when/if skb use a standard list_head */
-
 /* remove one skb from head of slot queue */
-static inline struct sk_buff *dequeue_head(struct cake_fqcd_flow *flow)
+
+static inline struct sk_buff *dequeue_head(struct cake_flow *flow)
 {
     struct sk_buff *skb = flow->head;
 
@@ -342,8 +345,9 @@ static inline struct sk_buff *dequeue_head(struct cake_fqcd_flow *flow)
 }
 
 /* add skb to flow queue (tail add) */
+
 static inline void
-flow_queue_add(struct cake_fqcd_flow *flow, struct sk_buff *skb)
+flow_queue_add(struct cake_flow *flow, struct sk_buff *skb)
 {
     if (flow->head == NULL)
         flow->head = skb;
@@ -380,21 +384,21 @@ static unsigned int cake_drop(struct Qdisc *sch)
 {
 	struct cake_sched_data *q = qdisc_priv(sch);
 	struct sk_buff *skb;
-	unsigned int maxbacklog=0, idx=0, cls=0, i, j, len;
-	struct cake_fqcd_sched_data *fqcd;
-	struct cake_fqcd_flow *flow;
+	unsigned int maxbacklog=0, idx=0, bin=0, i, j, len;
+	struct cake_bin_data *fqcd;
+	struct cake_flow *flow;
 
-	/* Queue is full; check across classes in use
+	/* Queue is full; check across bins in use
 	 * find the fat flow and drop a packet. */
-	for(j=0; j < q->class_cnt; j++) {
-		fqcd = &q->classes[j];
+	for(j=0; j < q->bin_cnt; j++) {
+		fqcd = &q->bins[j];
 
 		list_for_each_entry(flow, &fqcd->old_flows, flowchain) {
 			i = flow - fqcd->flows;
 			if(fqcd->backlogs[i] > maxbacklog) {
 				maxbacklog = fqcd->backlogs[i];
 				idx = i;
-				cls = j;
+				bin = j;
 			}
 		}
 
@@ -403,29 +407,29 @@ static unsigned int cake_drop(struct Qdisc *sch)
 			if(fqcd->backlogs[i] > maxbacklog) {
 				maxbacklog = fqcd->backlogs[i];
 				idx = i;
-				cls = j;
+				bin = j;
 			}
 		}
 	}
 
-	fqcd = &q->classes[cls];
+	fqcd = &q->bins[bin];
 	flow = &fqcd->flows[idx];
 	skb = dequeue_head(flow);
 	len = qdisc_pkt_len(skb);
 
 	q->buffer_used      -= skb->truesize;
 	fqcd->backlogs[idx] -= len;
-	fqcd->class_backlog -= len;
+	fqcd->bin_backlog -= len;
 	sch->qstats.backlog -= len;
 
-	fqcd->class_dropped++;
+	fqcd->bin_dropped++;
 	sch->qstats.drops++;
 	flow->dropped++;
 
 	kfree_skb(skb);
 	sch->q.qlen--;
 
-	return idx + (cls << 16);
+	return idx + (bin << 16);
 }
 
 static inline void cake_squash_diffserv(struct sk_buff *skb)
@@ -459,32 +463,32 @@ static inline unsigned int cake_get_diffserv(struct sk_buff *skb)
 static int cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 {
 	struct cake_sched_data *q = qdisc_priv(sch);
-	unsigned int idx, cls;
-	struct cake_fqcd_sched_data *fqcd;
-	struct cake_fqcd_flow *flow;
+	unsigned int idx, bin;
+	struct cake_bin_data *fqcd;
+	struct cake_flow *flow;
 	u32 len = qdisc_pkt_len(skb);
 
 	/* extract the Diffserv Precedence field, if it exists */
-	if(q->class_mode != CAKE_MODE_SQUASH) {
-		cls = q->class_index[cake_get_diffserv(skb)];
-		if(unlikely(cls >= q->class_cnt))
-			cls = 0;
+	if(q->bin_mode != CAKE_MODE_SQUASH) {
+		bin = q->bin_index[cake_get_diffserv(skb)];
+		if(unlikely(bin >= q->bin_cnt))
+			bin = 0;
 	} else {
 		cake_squash_diffserv(skb);
-		cls = q->class_index[0];
+		bin = q->bin_index[0];
 	}
 
-	fqcd = &q->classes[cls];
+	fqcd = &q->bins[bin];
 
 	/* choose flow to insert into */
-	idx = cake_fqcd_hash(fqcd, skb, q->flow_mode);
+	idx = cake_hash(fqcd, skb, q->flow_mode);
 	flow = &fqcd->flows[idx];
 
 	/* ensure shaper state isn't stale */
-	if(!fqcd->class_backlog) {
+	if(!fqcd->bin_backlog) {
 		u64 now = ktime_get_ns();
-		if(fqcd->class_time_next_packet < now)
-			fqcd->class_time_next_packet = now;
+		if(fqcd->bin_time_next_packet < now)
+			fqcd->bin_time_next_packet = now;
 
 		if(!sch->q.qlen)
 			if(q->time_next_packet < now)
@@ -522,7 +526,7 @@ static int cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 			fqcd->packets++;
 			fqcd->bytes         += segs->len;
 			fqcd->backlogs[idx] += segs->len;
-			fqcd->class_backlog += segs->len;
+			fqcd->bin_backlog += segs->len;
 			sch->qstats.backlog += segs->len;
 			q->buffer_used      += segs->truesize;
 
@@ -541,7 +545,7 @@ static int cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 		fqcd->packets++;
 		fqcd->bytes         += len;
 		fqcd->backlogs[idx] += len;
-		fqcd->class_backlog += len;
+		fqcd->bin_backlog += len;
 		sch->qstats.backlog += len;
 		q->buffer_used      += skb->truesize;
 	}
@@ -562,7 +566,7 @@ static int cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 
 		while(q->buffer_used > q->buffer_limit) {
 			dropped++;
-			if(cake_drop(sch) == idx + (cls << 16))
+			if(cake_drop(sch) == idx + (bin << 16))
 				same_flow = true;
 		}
 		fqcd->drop_overlimit += dropped;
@@ -575,32 +579,32 @@ static int cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 static struct sk_buff *custom_dequeue(struct codel_vars *vars, struct Qdisc *sch)
 {
 	struct cake_sched_data *q = qdisc_priv(sch);
-	struct cake_fqcd_sched_data *fqcd = &q->classes[q->cur_class];
-	struct cake_fqcd_flow *flow = &fqcd->flows[q->cur_flow];
+	struct cake_bin_data *fqcd = &q->bins[q->cur_bin];
+	struct cake_flow *flow = &fqcd->flows[q->cur_flow];
 	struct sk_buff *skb = NULL;
 	u32 len;
 
-	/* WARN_ON(flow != container_of(vars, struct cake_fqcd_flow, cvars)); */
+	/* WARN_ON(flow != container_of(vars, struct cake_flow, cvars)); */
 
 	if(flow->head) {
 		skb = dequeue_head(flow);
 		len = qdisc_pkt_len(skb);
 		fqcd->backlogs[q->cur_flow] -= len;
-		fqcd->class_backlog         -= len;
+		fqcd->bin_backlog         -= len;
 		q->buffer_used              -= skb->truesize;
 		sch->q.qlen--;
 	}
 	return skb;
 }
 
-/* Discard leftover packets from a class no longer in use. */
-static void cake_clear_class(struct Qdisc *sch, u16 class)
+/* Discard leftover packets from a bin no longer in use. */
+static void cake_clear_bin(struct Qdisc *sch, u16 bin)
 {
 	struct cake_sched_data *q = qdisc_priv(sch);
-	struct cake_fqcd_sched_data *fqcd = &q->classes[class];
+	struct cake_bin_data *b = &q->bins[bin];
 
-	q->cur_class = class;
-	for(q->cur_flow = 0; q->cur_flow < fqcd->flows_cnt; q->cur_flow++)
+	q->cur_bin = bin;
+	for(q->cur_flow = 0; q->cur_flow < b->flows_cnt; q->cur_flow++)
 		while(custom_dequeue(NULL, sch))
 			;
 }
@@ -609,8 +613,8 @@ static struct sk_buff *cake_dequeue(struct Qdisc *sch)
 {
 	struct cake_sched_data *q = qdisc_priv(sch);
 	struct sk_buff *skb;
-	struct cake_fqcd_sched_data *fqcd = &q->classes[q->cur_class];
-	struct cake_fqcd_flow *flow;
+	struct cake_bin_data *fqcd = &q->bins[q->cur_bin];
+	struct cake_flow *flow;
 	struct list_head *head;
 	u32 prev_drop_count, prev_ecn_mark;
 	u32 len;
@@ -630,20 +634,20 @@ begin:
 	}
 
 	/* Choose a class to work on. */
-	while(!fqcd->class_backlog || fqcd->class_deficit <= 0)
+	while(!fqcd->bin_backlog || fqcd->bin_deficit <= 0)
 	{
 		/* this is the priority soft-shaper magic */
-		if(fqcd->class_deficit <= 0)
-			fqcd->class_deficit +=
-				fqcd->class_time_next_packet > now ?
-					fqcd->class_quantum_band :
-					fqcd->class_quantum_prio;
+		if(fqcd->bin_deficit <= 0)
+			fqcd->bin_deficit +=
+				fqcd->bin_time_next_packet > now ?
+					fqcd->bin_quantum_band :
+					fqcd->bin_quantum_prio;
 
-		q->cur_class++;
+		q->cur_bin++;
 		fqcd++;
-		if(q->cur_class >= q->class_cnt) {
-			q->cur_class = 0;
-			fqcd = q->classes;
+		if(q->cur_bin >= q->bin_cnt) {
+			q->cur_bin = 0;
+			fqcd = q->bins;
 		}
 	}
 
@@ -655,12 +659,12 @@ retry:
 
 		if(unlikely(list_empty(head))) {
 			/* shouldn't ever happen */
-			WARN_ON(fqcd->class_backlog);
-			fqcd->class_backlog = 0;
+			WARN_ON(fqcd->bin_backlog);
+			fqcd->bin_backlog = 0;
 			goto begin;
 		}
 	}
-	flow = list_first_entry(head, struct cake_fqcd_flow, flowchain);
+	flow = list_first_entry(head, struct cake_flow, flowchain);
 	q->cur_flow = flow - fqcd->flows;
 
 	if(flow->deficit <= 0) {
@@ -680,8 +684,8 @@ retry:
 	                    fqcd->cparams.interval, fqcd->cparams.target, fqcd->cparams.threshold,
 	                    q->buffer_used > (q->buffer_limit >> 2) + (q->buffer_limit >> 1));
 
-	fqcd->class_dropped  += flow->cvars.drop_count - prev_drop_count;
-	fqcd->class_ecn_mark += flow->cvars.ecn_mark   - prev_ecn_mark;
+	fqcd->bin_dropped  += flow->cvars.drop_count - prev_drop_count;
+	fqcd->bin_ecn_mark += flow->cvars.ecn_mark   - prev_ecn_mark;
 	flow->dropped        += flow->cvars.drop_count - prev_drop_count;
 	flow->dropped        += flow->cvars.ecn_mark   - prev_ecn_mark;
 
@@ -710,7 +714,7 @@ retry:
 	len = cake_overhead(q, qdisc_pkt_len(skb));
 
 	flow->deficit       -= len;
-	fqcd->class_deficit -= len;
+	fqcd->bin_deficit -= len;
 
 	/* collect delay stats */
 	delay = now - codel_get_enqueue_time(skb);
@@ -718,10 +722,10 @@ retry:
 	fqcd->peak_delay = cake_ewma(fqcd->peak_delay, delay, delay > fqcd->peak_delay ? 2 : 8);
 	fqcd->base_delay = cake_ewma(fqcd->base_delay, delay, delay < fqcd->base_delay ? 2 : 8);
 
-	/* charge packet bandwidth to this and all lower classes, and to the global shaper */
-	for(i=q->cur_class; i >= 0; i--, fqcd--)
-		fqcd->class_time_next_packet +=
-			(len * (u64) fqcd->class_rate_ns) >> fqcd->class_rate_shft;
+	/* charge packet bandwidth to this and all lower bins, and to the global shaper */
+	for(i=q->cur_bin; i >= 0; i--, fqcd--)
+		fqcd->bin_time_next_packet +=
+			(len * (u64) fqcd->bin_rate_ns) >> fqcd->bin_rate_shft;
 	q->time_next_packet += (len * (u64) q->rate_ns) >> q->rate_shft;
 
 	return skb;
@@ -731,8 +735,8 @@ static void cake_reset(struct Qdisc *sch)
 {
 	int c;
 
-	for(c = 0; c < CAKE_MAX_CLASSES; c++)
-		cake_clear_class(sch, c);
+	for(c = 0; c < CAKE_MAX_BINS; c++)
+		cake_clear_bin(sch, c);
 }
 
 static const struct nla_policy cake_policy[TCA_CAKE_MAX + 1] = {
@@ -743,7 +747,7 @@ static const struct nla_policy cake_policy[TCA_CAKE_MAX + 1] = {
 	[TCA_CAKE_OVERHEAD]      = { .type = NLA_U32 },
 };
 
-static void cake_set_rate(struct cake_fqcd_sched_data *fqcd,
+static void cake_set_rate(struct cake_bin_data *fqcd,
 						  u64 rate,
 						  u32 mtu,
 						  u32 ns_target,
@@ -766,9 +770,9 @@ static void cake_set_rate(struct cake_fqcd_sched_data *fqcd,
 		}
 	} /* else unlimited, ie. zero delay */
 
-	fqcd->class_rate_bps  = rate;
-	fqcd->class_rate_ns   = rate_ns;
-	fqcd->class_rate_shft = rate_shft;
+	fqcd->bin_rate_bps  = rate;
+	fqcd->bin_rate_ns   = rate_ns;
+	fqcd->bin_rate_shft = rate_shft;
 
 	byte_target_ns = (byte_target * rate_ns) >> rate_shft;
 
@@ -782,18 +786,18 @@ static void cake_set_rate(struct cake_fqcd_sched_data *fqcd,
 static void cake_config_besteffort(struct Qdisc *sch)
 {
 	struct cake_sched_data *q = qdisc_priv(sch);
-	struct cake_fqcd_sched_data *fqcd = &q->classes[0];
+	struct cake_bin_data *fqcd = &q->bins[0];
 	u64 rate = q->rate_bps;
 	u32 mtu = psched_mtu(qdisc_dev(sch));
 	unsigned int i;
 
-	q->class_cnt = 1;
+	q->bin_cnt = 1;
 
 	for(i=0; i < 64; i++)
-		q->class_index[i] = 0;
+		q->bin_index[i] = 0;
 
 	cake_set_rate(fqcd, rate, mtu, MS2TIME(5), MS2TIME(100));
-	fqcd->class_quantum_band = fqcd->class_quantum_prio = 65535;
+	fqcd->bin_quantum_band = fqcd->bin_quantum_prio = 65535;
 }
 
 static void cake_config_precedence(struct Qdisc *sch)
@@ -806,18 +810,18 @@ static void cake_config_precedence(struct Qdisc *sch)
 	u32 quantum2 = 256;
 	u32 i;
 
-	q->class_cnt = 8;
+	q->bin_cnt = 8;
 
 	for(i=0; i < 64; i++)
-		q->class_index[i] = min((u32)(i >> 3), (u32)(q->class_cnt));
+		q->bin_index[i] = min((u32)(i >> 3), (u32)(q->bin_cnt));
 
-	for(i=0; i < q->class_cnt; i++) {
-		struct cake_fqcd_sched_data *fqcd = &q->classes[i];
+	for(i=0; i < q->bin_cnt; i++) {
+		struct cake_bin_data *fqcd = &q->bins[i];
 
 		cake_set_rate(fqcd, rate, mtu, MS2TIME(5), MS2TIME(100));
 
-		fqcd->class_quantum_prio = max(1U, quantum1);
-		fqcd->class_quantum_band = max(1U, quantum2);
+		fqcd->bin_quantum_prio = max(1U, quantum1);
+		fqcd->bin_quantum_band = max(1U, quantum2);
 
 		/* calculate next class's parameters */
 		rate  *= 7;
@@ -854,7 +858,7 @@ static void cake_config_precedence(struct Qdisc *sch)
 	Total 25 codepoints.
  */
 
-/*	List of traffic classes in RFC 4594:
+/*	List of traffic bins in RFC 4594:
 		(roughly descending order of contended priority)
 		(roughly ascending order of uncontended throughput)
 
@@ -871,12 +875,12 @@ static void cake_config_precedence(struct Qdisc *sch)
 	High Throughput Data (AF1x,TOS2)  - eg. web traffic
 	Low Priority Data (CS1)           - eg. BitTorrent
 
-	Total 12 traffic classes.
+	Total 12 traffic bins.
  */
 
 static void cake_config_diffserv8(struct Qdisc *sch)
 {
-	/*	Pruned list of traffic classes for typical applications:
+	/*	Pruned list of traffic bins for typical applications:
 
 		Network Control          (CS6, CS7)
 		Minimum Latency          (EF, VA, CS5, CS4)
@@ -887,7 +891,7 @@ static void cake_config_diffserv8(struct Qdisc *sch)
 		High Throughput          (AF1x, TOS2)
 		Background Traffic       (CS1)
 
-		Total 8 traffic classes.
+		Total 8 traffic bins.
 	 */
 
 	struct cake_sched_data *q = qdisc_priv(sch);
@@ -897,40 +901,40 @@ static void cake_config_diffserv8(struct Qdisc *sch)
 	u32 quantum2 = 256;
 	u32 i;
 
-	q->class_cnt = 8;
+	q->bin_cnt = 8;
 
 	/* codepoint to class mapping */
 	for(i=0; i < 64; i++)
-		q->class_index[i] = 2;	/* default to best-effort */
+		q->bin_index[i] = 2;	/* default to best-effort */
 
-	q->class_index[0x08] = 0;	/* CS1 */
-	q->class_index[0x02] = 1;	/* TOS2 */
-	q->class_index[0x18] = 3;	/* CS3 */
-	q->class_index[0x04] = 4;	/* TOS4 */
-	q->class_index[0x01] = 5;	/* TOS1 */
-	q->class_index[0x10] = 5;	/* CS2 */
-	q->class_index[0x20] = 6;	/* CS4 */
-	q->class_index[0x28] = 6;	/* CS5 */
-	q->class_index[0x2c] = 6;	/* VA */
-	q->class_index[0x2e] = 6;	/* EF */
-	q->class_index[0x30] = 7;	/* CS6 */
-	q->class_index[0x38] = 7;	/* CS7 */
+	q->bin_index[0x08] = 0;	/* CS1 */
+	q->bin_index[0x02] = 1;	/* TOS2 */
+	q->bin_index[0x18] = 3;	/* CS3 */
+	q->bin_index[0x04] = 4;	/* TOS4 */
+	q->bin_index[0x01] = 5;	/* TOS1 */
+	q->bin_index[0x10] = 5;	/* CS2 */
+	q->bin_index[0x20] = 6;	/* CS4 */
+	q->bin_index[0x28] = 6;	/* CS5 */
+	q->bin_index[0x2c] = 6;	/* VA */
+	q->bin_index[0x2e] = 6;	/* EF */
+	q->bin_index[0x30] = 7;	/* CS6 */
+	q->bin_index[0x38] = 7;	/* CS7 */
 
 	for(i=2; i <= 6; i += 2) {
-		q->class_index[0x08 + i] = 1;	/* AF1x */
-		q->class_index[0x10 + i] = 4;	/* AF2x */
-		q->class_index[0x18 + i] = 3;	/* AF3x */
-		q->class_index[0x20 + i] = 3;	/* AF4x */
+		q->bin_index[0x08 + i] = 1;	/* AF1x */
+		q->bin_index[0x10 + i] = 4;	/* AF2x */
+		q->bin_index[0x18 + i] = 3;	/* AF3x */
+		q->bin_index[0x20 + i] = 3;	/* AF4x */
 	}
 
 	/* class characteristics */
-	for(i=0; i < q->class_cnt; i++) {
-		struct cake_fqcd_sched_data *fqcd = &q->classes[i];
+	for(i=0; i < q->bin_cnt; i++) {
+		struct cake_bin_data *fqcd = &q->bins[i];
 
 		cake_set_rate(fqcd, rate, mtu, MS2TIME(5), MS2TIME(100));
 
-		fqcd->class_quantum_prio = max(1U, quantum1);
-		fqcd->class_quantum_band = max(1U, quantum2);
+		fqcd->bin_quantum_prio = max(1U, quantum1);
+		fqcd->bin_quantum_band = max(1U, quantum2);
 
 		/* calculate next class's parameters */
 		rate  *= 7;
@@ -946,14 +950,14 @@ static void cake_config_diffserv8(struct Qdisc *sch)
 
 static void cake_config_diffserv4(struct Qdisc *sch)
 {
-	/*  Further pruned list of traffic classes for four-class system:
+	/*  Further pruned list of traffic bins for four-class system:
 
 	    Latency Sensitive  (CS7, CS6, EF, VA, CS5, CS4)
 	    Streaming Media    (AF4x, AF3x, CS3, AF2x, TOS4, CS2, TOS1)
 	    Best Effort        (CS0, AF1x, TOS2, and all not otherwise specified)
 	    Background Traffic (CS1)
 
-		Total 4 traffic classes.
+		Total 4 traffic bins.
 	 */
 
 	struct cake_sched_data *q = qdisc_priv(sch);
@@ -962,49 +966,49 @@ static void cake_config_diffserv4(struct Qdisc *sch)
 	u32 quantum = 256;
 	u32 i;
 
-	q->class_cnt = 4;
+	q->bin_cnt = 4;
 
 	/* codepoint to class mapping */
 	for(i=0; i < 64; i++)
-		q->class_index[i] = 1;	/* default to best-effort */
+		q->bin_index[i] = 1;	/* default to best-effort */
 
-	q->class_index[0x08] = 0;	/* CS1 */
+	q->bin_index[0x08] = 0;	/* CS1 */
 
-	q->class_index[0x18] = 2;	/* CS3 */
-	q->class_index[0x04] = 2;	/* TOS4 */
-	q->class_index[0x01] = 2;	/* TOS1 */
-	q->class_index[0x10] = 2;	/* CS2 */
+	q->bin_index[0x18] = 2;	/* CS3 */
+	q->bin_index[0x04] = 2;	/* TOS4 */
+	q->bin_index[0x01] = 2;	/* TOS1 */
+	q->bin_index[0x10] = 2;	/* CS2 */
 
-	q->class_index[0x20] = 3;	/* CS4 */
-	q->class_index[0x28] = 3;	/* CS5 */
-	q->class_index[0x2c] = 3;	/* VA */
-	q->class_index[0x2e] = 3;	/* EF */
-	q->class_index[0x30] = 3;	/* CS6 */
-	q->class_index[0x38] = 3;	/* CS7 */
+	q->bin_index[0x20] = 3;	/* CS4 */
+	q->bin_index[0x28] = 3;	/* CS5 */
+	q->bin_index[0x2c] = 3;	/* VA */
+	q->bin_index[0x2e] = 3;	/* EF */
+	q->bin_index[0x30] = 3;	/* CS6 */
+	q->bin_index[0x38] = 3;	/* CS7 */
 
 	for(i=2; i <= 6; i += 2) {
-		q->class_index[0x10 + i] = 2;	/* AF2x */
-		q->class_index[0x18 + i] = 2;	/* AF3x */
-		q->class_index[0x20 + i] = 2;	/* AF4x */
+		q->bin_index[0x10 + i] = 2;	/* AF2x */
+		q->bin_index[0x18 + i] = 2;	/* AF3x */
+		q->bin_index[0x20 + i] = 2;	/* AF4x */
 	}
 
 	/* class characteristics */
-	cake_set_rate(&q->classes[0], rate,               mtu, MS2TIME(5), MS2TIME(100));
-	cake_set_rate(&q->classes[1], rate - (rate >> 4), mtu, MS2TIME(5), MS2TIME(100));
-	cake_set_rate(&q->classes[2], rate - (rate >> 2), mtu, MS2TIME(5), MS2TIME(100));
-	cake_set_rate(&q->classes[3], rate >> 2,          mtu, MS2TIME(5), MS2TIME(100));
+	cake_set_rate(&q->bins[0], rate,               mtu, MS2TIME(5), MS2TIME(100));
+	cake_set_rate(&q->bins[1], rate - (rate >> 4), mtu, MS2TIME(5), MS2TIME(100));
+	cake_set_rate(&q->bins[2], rate - (rate >> 2), mtu, MS2TIME(5), MS2TIME(100));
+	cake_set_rate(&q->bins[3], rate >> 2,          mtu, MS2TIME(5), MS2TIME(100));
 
 	/* priority weights */
-	q->classes[0].class_quantum_prio = quantum >> 4;
-	q->classes[1].class_quantum_prio = quantum;
-	q->classes[2].class_quantum_prio = quantum << 2;
-	q->classes[3].class_quantum_prio = quantum << 4;
+	q->bins[0].bin_quantum_prio = quantum >> 4;
+	q->bins[1].bin_quantum_prio = quantum;
+	q->bins[2].bin_quantum_prio = quantum << 2;
+	q->bins[3].bin_quantum_prio = quantum << 4;
 
 	/* bandwidth-sharing weights */
-	q->classes[0].class_quantum_band = (quantum >> 4);
-	q->classes[1].class_quantum_band = (quantum >> 3) + (quantum >> 4);
-	q->classes[2].class_quantum_band = (quantum >> 1);
-	q->classes[3].class_quantum_band = (quantum >> 2);
+	q->bins[0].bin_quantum_band = (quantum >> 4);
+	q->bins[1].bin_quantum_band = (quantum >> 3) + (quantum >> 4);
+	q->bins[2].bin_quantum_band = (quantum >> 1);
+	q->bins[3].bin_quantum_band = (quantum >> 2);
 }
 
 static void cake_reconfigure(struct Qdisc *sch)
@@ -1012,7 +1016,7 @@ static void cake_reconfigure(struct Qdisc *sch)
 	struct cake_sched_data *q = qdisc_priv(sch);
 	int c;
 
-	switch(q->class_mode) {
+	switch(q->bin_mode) {
 	case CAKE_MODE_SQUASH:
 	case CAKE_MODE_BESTEFFORT:
 	default:
@@ -1032,16 +1036,16 @@ static void cake_reconfigure(struct Qdisc *sch)
 		break;
 	};
 
-	BUG_ON(CAKE_MAX_CLASSES < q->class_cnt);
-	for(c = q->class_cnt; c < CAKE_MAX_CLASSES; c++)
-		cake_clear_class(sch, c);
+	BUG_ON(CAKE_MAX_BINS < q->bin_cnt);
+	for(c = q->bin_cnt; c < CAKE_MAX_BINS; c++)
+		cake_clear_bin(sch, c);
 
-	q->rate_ns   = q->classes[0].class_rate_ns;
-	q->rate_shft = q->classes[0].class_rate_shft;
+	q->rate_ns   = q->bins[0].bin_rate_ns;
+	q->rate_shft = q->bins[0].bin_rate_shft;
 
 	if(q->rate_bps)
 	{
-		u64 t = q->rate_bps * q->classes[0].cparams.interval;
+		u64 t = q->rate_bps * q->bins[0].cparams.interval;
 		do_div(t, NSEC_PER_SEC / 4);
 		q->buffer_limit = t;
 
@@ -1074,7 +1078,7 @@ static int cake_change(struct Qdisc *sch, struct nlattr *opt)
 		q->rate_bps = nla_get_u32(tb[TCA_CAKE_BASE_RATE]);
 
 	if(tb[TCA_CAKE_DIFFSERV_MODE])
-		q->class_mode = nla_get_u32(tb[TCA_CAKE_DIFFSERV_MODE]);
+		q->bin_mode = nla_get_u32(tb[TCA_CAKE_DIFFSERV_MODE]);
 
 	if(tb[TCA_CAKE_ATM]) {
 		if(!!nla_get_u32(tb[TCA_CAKE_ATM]))
@@ -1089,7 +1093,7 @@ static int cake_change(struct Qdisc *sch, struct nlattr *opt)
 	if(tb[TCA_CAKE_OVERHEAD])
 		q->rate_overhead = nla_get_u32(tb[TCA_CAKE_OVERHEAD]);
 
-	if(q->classes) {
+	if(q->bins) {
 		sch_tree_lock(sch);
 		cake_reconfigure(sch);
 		sch_tree_unlock(sch);
@@ -1119,14 +1123,14 @@ static void cake_destroy(struct Qdisc *sch)
 
 	qdisc_watchdog_cancel(&q->watchdog);
 
-	if(q->classes) {
+	if(q->bins) {
 		u32 i;
-		for(i=0; i < CAKE_MAX_CLASSES; i++) {
-			cake_free(q->classes[i].tags);
-			cake_free(q->classes[i].backlogs);
-			cake_free(q->classes[i].flows);
+		for(i=0; i < CAKE_MAX_BINS; i++) {
+			cake_free(q->bins[i].tags);
+			cake_free(q->bins[i].backlogs);
+			cake_free(q->bins[i].flows);
 		}
-		cake_free(q->classes);
+		cake_free(q->bins);
 	}
 }
 
@@ -1138,12 +1142,12 @@ static int cake_init(struct Qdisc *sch, struct nlattr *opt)
 	codel_cache_init();
 
 	sch->limit = 10240;
-	q->class_mode = CAKE_MODE_DIFFSERV4;
+	q->bin_mode = CAKE_MODE_DIFFSERV4;
 	q->flow_mode  = CAKE_FLOW_FLOWS;
 
 	q->rate_bps = 0; /* unlimited by default */
 
-	q->cur_class = 0;
+	q->cur_bin = 0;
 	q->cur_flow  = 0;
 
 	if(opt) {
@@ -1154,12 +1158,12 @@ static int cake_init(struct Qdisc *sch, struct nlattr *opt)
 
 	qdisc_watchdog_init(&q->watchdog, sch);
 
-	q->classes = cake_zalloc(CAKE_MAX_CLASSES * sizeof(struct cake_fqcd_sched_data));
-	if(!q->classes)
+	q->bins = cake_zalloc(CAKE_MAX_BINS * sizeof(struct cake_bin_data));
+	if(!q->bins)
 		goto nomem;
 
-	for(i=0; i < CAKE_MAX_CLASSES; i++) {
-		struct cake_fqcd_sched_data *fqcd = q->classes + i;
+	for(i=0; i < CAKE_MAX_BINS; i++) {
+		struct cake_bin_data *fqcd = q->bins + i;
 
 		fqcd->flows_cnt = 1024;
 		fqcd->perturbation = prandom_u32();
@@ -1169,14 +1173,14 @@ static int cake_init(struct Qdisc *sch, struct nlattr *opt)
 		fqcd->bulk_flow_count=0;
 		/* codel_params_init(&fqcd->cparams); */
 
-		fqcd->flows    = cake_zalloc(fqcd->flows_cnt * sizeof(struct cake_fqcd_flow));
+		fqcd->flows    = cake_zalloc(fqcd->flows_cnt * sizeof(struct cake_flow));
 		fqcd->backlogs = cake_zalloc(fqcd->flows_cnt * sizeof(u32));
 		fqcd->tags     = cake_zalloc(fqcd->flows_cnt * sizeof(u32));
 		if(!fqcd->flows || !fqcd->backlogs || !fqcd->tags)
 			goto nomem;
 
 		for(j=0; j < fqcd->flows_cnt; j++) {
-			struct cake_fqcd_flow *flow = fqcd->flows + j;
+			struct cake_flow *flow = fqcd->flows + j;
 
 			INIT_LIST_HEAD(&flow->flowchain);
 			codel_vars_init(&flow->cvars);
@@ -1206,7 +1210,7 @@ static int cake_dump(struct Qdisc *sch, struct sk_buff *skb)
 	if(nla_put_u32(skb, TCA_CAKE_BASE_RATE, q->rate_bps))
 		goto nla_put_failure;
 
-	if(nla_put_u32(skb, TCA_CAKE_DIFFSERV_MODE, q->class_mode))
+	if(nla_put_u32(skb, TCA_CAKE_DIFFSERV_MODE, q->bin_mode))
 		goto nla_put_failure;
 
 	if(nla_put_u32(skb, TCA_CAKE_ATM, !!(q->rate_flags & CAKE_FLAG_ATM)))
@@ -1234,35 +1238,35 @@ static int cake_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 	if(!st)
 		return -1;
 
-	BUG_ON(q->class_cnt > (sizeof(st->cls) / sizeof(st->cls[0])));
+	BUG_ON(q->bin_cnt > (sizeof(st->bin) / sizeof(st->bin[0])));
 
 	st->type = 0xCAFE;
-	st->class_cnt = q->class_cnt;
+	st->bin_cnt = q->bin_cnt;
 
-	for(i=0; i < q->class_cnt; i++) {
-		struct cake_fqcd_sched_data *fqcd = &q->classes[i];
+	for(i=0; i < q->bin_cnt; i++) {
+		struct cake_bin_data *fqcd = &q->bins[i];
 
-		st->cls[i].rate          = fqcd->class_rate_bps;
-		st->cls[i].target_us     = codel_time_to_us(fqcd->cparams.target);
-		st->cls[i].interval_us   = codel_time_to_us(fqcd->cparams.interval);
-		st->cls[i].packets       = fqcd->packets;
-		st->cls[i].bytes         = fqcd->bytes;
-		st->cls[i].dropped       = fqcd->class_dropped;
-		st->cls[i].ecn_marked    = fqcd->class_ecn_mark;
-		st->cls[i].backlog_bytes = fqcd->class_backlog;
+		st->bin[i].rate          = fqcd->bin_rate_bps;
+		st->bin[i].target_us     = codel_time_to_us(fqcd->cparams.target);
+		st->bin[i].interval_us   = codel_time_to_us(fqcd->cparams.interval);
+		st->bin[i].packets       = fqcd->packets;
+		st->bin[i].bytes         = fqcd->bytes;
+		st->bin[i].dropped       = fqcd->bin_dropped;
+		st->bin[i].ecn_marked    = fqcd->bin_ecn_mark;
+		st->bin[i].backlog_bytes = fqcd->bin_backlog;
 
-		st->cls[i].peak_delay = codel_time_to_us(fqcd->peak_delay);
-		st->cls[i].avge_delay = codel_time_to_us(fqcd->avge_delay);
-		st->cls[i].base_delay = codel_time_to_us(fqcd->base_delay);
+		st->bin[i].peak_delay = codel_time_to_us(fqcd->peak_delay);
+		st->bin[i].avge_delay = codel_time_to_us(fqcd->avge_delay);
+		st->bin[i].base_delay = codel_time_to_us(fqcd->base_delay);
 
-		st->cls[i].way_indirect_hits = fqcd->way_hits;
-		st->cls[i].way_misses        = fqcd->way_misses;
-		st->cls[i].way_collisions    = fqcd->way_collisions;
+		st->bin[i].way_indirect_hits = fqcd->way_hits;
+		st->bin[i].way_misses        = fqcd->way_misses;
+		st->bin[i].way_collisions    = fqcd->way_collisions;
 
-		st->cls[i].sparse_flows      = fqcd->sparse_flow_count;
-		st->cls[i].bulk_flows        = fqcd->bulk_flow_count;
-		st->cls[i].last_skblen       = fqcd->last_skblen;
-		st->cls[i].max_skblen        = fqcd->max_skblen;
+		st->bin[i].sparse_flows      = fqcd->sparse_flow_count;
+		st->bin[i].bulk_flows        = fqcd->bulk_flow_count;
+		st->bin[i].last_skblen       = fqcd->last_skblen;
+		st->bin[i].max_skblen        = fqcd->max_skblen;
 	}
 
 	i = gnet_stats_copy_app(d, st, sizeof(*st));
@@ -1294,7 +1298,7 @@ static struct tcf_proto **cake_find_tcf(struct Qdisc *sch, unsigned long cl)
 	return NULL;
 }
 
-static int cake_dump_class(struct Qdisc *sch, unsigned long cl, struct sk_buff *skb, struct tcmsg *tcm)
+static int cake_dump_bin(struct Qdisc *sch, unsigned long cl, struct sk_buff *skb, struct tcmsg *tcm)
 {
 	tcm->tcm_handle |= TC_H_MIN(cl);
 	return 0;
@@ -1304,19 +1308,19 @@ static int cake_dump_class_stats(struct Qdisc *sch, unsigned long cl, struct gne
 {
 	/* reuse fq_codel stats format */
 	struct cake_sched_data *q = qdisc_priv(sch);
-	struct cake_fqcd_sched_data *fqcd = q->classes;
-	u32 cls=0, idx=cl-1;
+	struct cake_bin_data *fqcd = q->bins;
+	u32 bin=0, idx=cl-1;
 	struct gnet_stats_queue qs = {0};
 	struct tc_fq_codel_xstats xstats;
 
-	while(cls < q->class_cnt && idx >= fqcd->flows_cnt) {
+	while(bin < q->bin_cnt && idx >= fqcd->flows_cnt) {
 		idx -= fqcd->flows_cnt;
-		cls++;
+		bin++;
 		fqcd++;
 	}
 
-	if(cls < q->class_cnt && idx >= fqcd->flows_cnt) {
-		const struct cake_fqcd_flow *flow = &fqcd->flows[idx];
+	if(bin < q->bin_cnt && idx >= fqcd->flows_cnt) {
+		const struct cake_flow *flow = &fqcd->flows[idx];
 		const struct sk_buff *skb = flow->head;
 
 		memset(&xstats, 0, sizeof(xstats));
@@ -1341,7 +1345,7 @@ static int cake_dump_class_stats(struct Qdisc *sch, unsigned long cl, struct gne
 	}
 	if (codel_stats_copy_queue(d, NULL, &qs, 0) < 0)
 		return -1;
-	if(cls < q->class_cnt && idx >= fqcd->flows_cnt)
+	if(bin < q->bin_cnt && idx >= fqcd->flows_cnt)
 		return gnet_stats_copy_app(d, &xstats, sizeof(xstats));
 	return 0;
 }
@@ -1354,8 +1358,8 @@ static void cake_walk(struct Qdisc *sch, struct qdisc_walker *arg)
 	if(arg->stop)
 		return;
 
-	for(j=k=0; j < q->class_cnt; j++) {
-		struct cake_fqcd_sched_data *fqcd = &q->classes[j];
+	for(j=k=0; j < q->bin_cnt; j++) {
+		struct cake_bin_data *fqcd = &q->bins[j];
 
 		for(i=0; i < fqcd->flows_cnt; i++,k++) {
 			if(list_empty(&fqcd->flows[i].flowchain) || arg->count < arg->skip) {
@@ -1378,7 +1382,7 @@ static const struct Qdisc_class_ops cake_class_ops = {
 	.tcf_chain	=	cake_find_tcf,
 	.bind_tcf	=	cake_bind,
 	.unbind_tcf	=	cake_put,
-	.dump		=	cake_dump_class,
+	.dump		=	cake_dump_bin,
 	.dump_stats	=	cake_dump_class_stats,
 	.walk		=	cake_walk,
 };

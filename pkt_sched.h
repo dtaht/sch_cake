@@ -861,7 +861,7 @@ enum {
 
 struct tc_cake_xstats {
 	__u16 type;  /* constant magic 0xCAFE */
-	__u16 class_cnt;
+	__u16 bin_cnt;
 	struct {
 		__u32 rate;
 		__u32 target_us;
@@ -881,7 +881,7 @@ struct tc_cake_xstats {
 		__u16 bulk_flows;
 		__u32 last_skblen; /* skb_headlen */
 		__u32 max_skblen;
-	} cls[8];
+	} bin[8];
 };
 
 #endif
