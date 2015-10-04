@@ -879,6 +879,8 @@ struct tc_cake_xstats {
 		__u32 base_delay; /* delay to sparse flows */
 		__u16 sparse_flows;
 		__u16 bulk_flows;
+		__u32 last_skblen; /* skb_headlen */
+		__u32 max_skblen;
 	} cls[8];
 };
 
