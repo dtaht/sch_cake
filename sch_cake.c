@@ -1222,7 +1222,11 @@ static int cake_init(struct Qdisc *sch, struct nlattr *opt)
 
 	cake_reconfigure(sch);
 
-	sch->flags &= ~TCQ_F_CAN_BYPASS;
+	if (q->rate_bps == 0) {
+		sch->flags |= ~TCQ_F_CAN_BYPASS;
+	} else {
+		sch->flags &= ~TCQ_F_CAN_BYPASS;
+	}
 
 	return 0;
 
