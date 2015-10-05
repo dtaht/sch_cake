@@ -296,9 +296,12 @@ cake_hash(struct cake_bin_data *q, const struct sk_buff *skb, int flow_mode)
 		u32 outer_hash = reduced_hash - inner_hash;
 		u32 i,j,k;
 
-		// check if any active queue in the set is reserved for this flow
-		// count the empty queues in the set, too
-		for(i=j=0, k=inner_hash; i < CAKE_SET_WAYS; i++, k = (k+1) % CAKE_SET_WAYS) {
+		/* check if any active queue in the set is reserved for
+		 * this flow. count the empty queues in the set, too 
+		 */
+		
+		for(i=j=0, k=inner_hash; i < CAKE_SET_WAYS; i++,
+			    k = (k+1) % CAKE_SET_WAYS) {
 			if(q->tags[outer_hash + k] == flow_hash) {
 				q->way_hits++;
 				goto found;
@@ -307,9 +310,10 @@ cake_hash(struct cake_bin_data *q, const struct sk_buff *skb, int flow_mode)
 			}
 		}
 
-		// no queue is reserved for this flow
+		/* no queue is reserved for this flow */
 		if(j) {
-			// there's at least one empty queue, so find one to reserve
+			/* there's at least one empty queue, so find one
+			   to reserve */
 			q->way_misses++;
 
 			for(i=0; i < CAKE_SET_WAYS; i++, k = (k+1) % CAKE_SET_WAYS)
@@ -324,7 +328,7 @@ cake_hash(struct cake_bin_data *q, const struct sk_buff *skb, int flow_mode)
 		}
 
 	found:
-		// reserve queue for future packets in same flow
+		/* reserve queue for future packets in same flow */
 		reduced_hash = outer_hash + k;
 		q->tags[reduced_hash] = flow_hash;
 	}
@@ -388,7 +392,7 @@ static unsigned int cake_drop(struct Qdisc *sch)
 	struct cake_bin_data *fqcd;
 	struct cake_flow *flow;
 
-	/* Queue is full; check across bins in use
+	/* Queue is full; check across bins in use and
 	 * find the fat flow and drop a packet. */
 	for(j=0; j < q->bin_cnt; j++) {
 		fqcd = &q->bins[j];

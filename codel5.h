@@ -382,8 +382,6 @@ static struct sk_buff *codel_dequeue(struct Qdisc *sch,
 			/* Mark the packet regardless */
 			if (skb && INET_ECN_set_ce(skb)) {
 				vars->ecn_mark++;
-				// vars->count++; /* ECN has mass */
-				// codel_Newton_step(vars); but I chickened out
 			}
 		}
 	} else if (drop) {
