@@ -235,15 +235,19 @@ cake_hash(struct cake_bin_data *q, const struct sk_buff *skb, int flow_mode)
 #if  KERNEL_VERSION(4, 2, 0) >= LINUX_VERSION_CODE
 	skb_flow_dissect(skb, &keys);
 
-	flow_hash = jhash_3words(
-		(__force u32)keys.dst,
-		(__force u32)keys.src ^ keys.ip_proto,
-		(__force u32)keys.ports, q->perturbation);
-
 	host_hash = jhash_3words(
 		(__force u32)((flow_mode & CAKE_FLOW_DST_IP) ? keys.dst : 0),
 		(__force u32)((flow_mode & CAKE_FLOW_SRC_IP) ? keys.src : 0),
 		(__force u32)0, q->perturbation);
+
+	if (!(flow_mode & CAKE_FLOW_FLOWS))
+		flow_hash = host_hash;
+	else
+		flow_hash = jhash_3words(
+			(__force u32)keys.dst,
+			(__force u32)keys.src ^ keys.ip_proto,
+			(__force u32)keys.ports, q->perturbation);
+
 #else
 	skb_flow_dissect_flow_keys(skb, &keys,
 				   FLOW_DISSECTOR_F_STOP_AT_FLOW_LABEL);
@@ -285,12 +289,13 @@ cake_hash(struct cake_bin_data *q, const struct sk_buff *skb, int flow_mode)
 		};
 	}
 
-	flow_hash = flow_hash_from_keys(&keys);
 	host_hash = flow_hash_from_keys(&host_keys);
-#endif
-
-	if (!(flow_mode & CAKE_FLOW_FLOWS))
+	if (!(flow_mode & CAKE_FLOW_FLOWS)) {
 		flow_hash = host_hash;
+	} else {		
+		flow_hash = flow_hash_from_keys(&keys);
+	}
+#endif
 	reduced_hash = reciprocal_scale(flow_hash, q->flows_cnt);
 
 	/* set-associative hashing */
