@@ -67,7 +67,7 @@
  * - An overall bandwidth shaper, to move the bottleneck away
  *   from dumb CPE equipment and bloated MACs.  This operates
  *   in deficit mode (as in sch_fq), eliminating the need for
- *   any sort of burst parameter (eg. token buxket depth).
+ *   any sort of burst parameter (eg. token bucket depth).
  *   Burst support is limited to that necessary to overcome
  *   scheduling latency.
  *
