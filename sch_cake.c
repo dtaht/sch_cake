@@ -232,7 +232,7 @@ cake_hash(struct cake_bin_data *q, const struct sk_buff *skb, int flow_mode)
 		     q->flows_cnt < CAKE_SET_WAYS))
 		return 0;
 
-#if  KERNEL_VERSION(4, 2, 0) > LINUX_VERSION_CODE
+#if KERNEL_VERSION(4, 2, 0) > LINUX_VERSION_CODE
 	skb_flow_dissect(skb, &keys);
 
 	host_hash = jhash_3words(
@@ -249,9 +249,16 @@ cake_hash(struct cake_bin_data *q, const struct sk_buff *skb, int flow_mode)
 			(__force u32)keys.ports, q->perturbation);
 
 #else
-	skb_flow_dissect_flow_keys(skb, &keys,
-				   FLOW_DISSECTOR_F_STOP_AT_FLOW_LABEL);
 
+/* Linux kernel 4.2.x have skb_flow_dissect_flow_keys which takes only 2
+ * arguments
+ */
+#if (KERNEL_VERSION(4, 2, 0) <= LINUX_VERSION_CODE) && (KERNEL_VERSION(4,3,0) >  LINUX_VERSION_CODE)
+	skb_flow_dissect_flow_keys(skb, &keys);
+#else
+	skb_flow_dissect_flow_keys(skb, &keys,
+				FLOW_DISSECTOR_F_STOP_AT_FLOW_LABEL);
+#endif
 	/* flow_hash_from_keys() sorts the addresses by value, so we have
 	 * to preserve their order in a separate data structure to treat
 	 * src and dst host addresses as independently selectable.
