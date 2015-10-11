@@ -51,7 +51,7 @@
 #include <net/netlink.h>
 #include <linux/version.h>
 #include "pkt_sched.h"
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4,2,0)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 2, 0)
 #include <net/flow_keys.h>
 #else
 #include <net/flow_dissector.h>
@@ -291,11 +291,10 @@ cake_hash(struct cake_bin_data *q, const struct sk_buff *skb, int flow_mode)
 	}
 
 	host_hash = flow_hash_from_keys(&host_keys);
-	if (!(flow_mode & CAKE_FLOW_FLOWS)) {
+	if (!(flow_mode & CAKE_FLOW_FLOWS))
 		flow_hash = host_hash;
-	} else {		
+	else
 		flow_hash = flow_hash_from_keys(&keys);
-	}
 #endif
 	reduced_hash = reciprocal_scale(flow_hash, q->flows_cnt);
 
@@ -1132,8 +1131,14 @@ static int cake_change(struct Qdisc *sch, struct nlattr *opt)
 	if (tb[TCA_CAKE_OVERHEAD])
 		q->rate_overhead = nla_get_u32(tb[TCA_CAKE_OVERHEAD]);
 
-	if (tb[TCA_CAKE_RTT])
+	if (tb[TCA_CAKE_RTT]) {
 		q->interval = nla_get_u32(tb[TCA_CAKE_RTT]);
+		if (10 > q->interval)
+			q->interval = 10;
+		else
+			if (1000 < q->interval)
+				q->interval = 1000;
+	}
 
 	if (q->bins) {
 		sch_tree_lock(sch);
@@ -1235,11 +1240,10 @@ static int cake_init(struct Qdisc *sch, struct nlattr *opt)
 
 	cake_reconfigure(sch);
 
-	if (q->rate_bps == 0) {
+	if (0 == q->rate_bps)
 		sch->flags |= TCQ_F_CAN_BYPASS;
-	} else {
+	else
 		sch->flags &= ~TCQ_F_CAN_BYPASS;
-	}
 
 	return 0;
 
