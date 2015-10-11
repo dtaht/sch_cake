@@ -51,7 +51,7 @@
 #include <net/netlink.h>
 #include <linux/version.h>
 #include "pkt_sched.h"
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4,2,0)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 2, 0)
 #include <net/flow_keys.h>
 #else
 #include <net/flow_dissector.h>
@@ -253,7 +253,7 @@ cake_hash(struct cake_bin_data *q, const struct sk_buff *skb, int flow_mode)
 /* Linux kernel 4.2.x have skb_flow_dissect_flow_keys which takes only 2
  * arguments
  */
-#if (KERNEL_VERSION(4, 2, 0) <= LINUX_VERSION_CODE) && (KERNEL_VERSION(4,3,0) >  LINUX_VERSION_CODE)
+#if (KERNEL_VERSION(4, 2, 0) <= LINUX_VERSION_CODE) && (KERNEL_VERSION(4, 3, 0) >  LINUX_VERSION_CODE)
 	skb_flow_dissect_flow_keys(skb, &keys);
 #else
 	skb_flow_dissect_flow_keys(skb, &keys,
@@ -297,11 +297,10 @@ cake_hash(struct cake_bin_data *q, const struct sk_buff *skb, int flow_mode)
 	}
 
 	host_hash = flow_hash_from_keys(&host_keys);
-	if (!(flow_mode & CAKE_FLOW_FLOWS)) {
+	if (!(flow_mode & CAKE_FLOW_FLOWS))
 		flow_hash = host_hash;
-	} else {		
+	else
 		flow_hash = flow_hash_from_keys(&keys);
-	}
 #endif
 	reduced_hash = reciprocal_scale(flow_hash, q->flows_cnt);
 
@@ -1234,11 +1233,10 @@ static int cake_init(struct Qdisc *sch, struct nlattr *opt)
 
 	cake_reconfigure(sch);
 
-	if (q->rate_bps == 0) {
+	if (q->rate_bps == 0)
 		sch->flags |= TCQ_F_CAN_BYPASS;
-	} else {
+	else
 		sch->flags &= ~TCQ_F_CAN_BYPASS;
-	}
 
 	return 0;
 
@@ -1287,7 +1285,7 @@ static int cake_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 	if (!st)
 		return -1;
 
-	BUG_ON(q->bin_cnt > (sizeof(st->bin) / sizeof(st->bin[0])));
+	BUG_ON(q->bin_cnt > ARRAY_SIZE(st->bin));
 
 	st->type = 0xCAFE;
 	st->bin_cnt = q->bin_cnt;

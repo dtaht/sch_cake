@@ -338,8 +338,8 @@ struct tc_choke_xstats {
 #define TC_HTB_PROTOVER		3 /* the same as HTB and TC's major */
 
 struct tc_htb_opt {
-	struct tc_ratespec 	rate;
-	struct tc_ratespec 	ceil;
+	struct tc_ratespec	rate;
+	struct tc_ratespec	ceil;
 	__u32	buffer;
 	__u32	cbuffer;
 	__u32	quantum;
@@ -348,8 +348,8 @@ struct tc_htb_opt {
 };
 struct tc_htb_glob {
 	__u32 version;		/* to match HTB/TC */
-    	__u32 rate2quantum;	/* bps->quantum divisor */
-    	__u32 defcls;		/* default class number */
+	__u32 rate2quantum;	/* bps->quantum divisor */
+	__u32 defcls;		/* default class number */
 	__u32 debug;		/* debug flags */
 
 	/* stats */
@@ -418,8 +418,8 @@ struct tc_cbq_lssopt {
 	unsigned char	flags;
 #define TCF_CBQ_LSS_BOUNDED	1
 #define TCF_CBQ_LSS_ISOLATED	2
-	unsigned char  	ewma_log;
-	unsigned char  	level;
+	unsigned char	ewma_log;
+	unsigned char	level;
 #define TCF_CBQ_LSS_FLAGS	1
 #define TCF_CBQ_LSS_EWMA	2
 #define TCF_CBQ_LSS_MAXIDLE	4
