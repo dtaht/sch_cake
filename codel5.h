@@ -119,6 +119,7 @@ typedef u64 codel_time_t;
 typedef s64 codel_tdiff_t;
 
 #define MS2TIME(a) (a * NSEC_PER_MSEC)
+#define US2TIME(a) (a * NSEC_PER_USEC)
 
 static inline codel_time_t codel_get_time(void)
 {

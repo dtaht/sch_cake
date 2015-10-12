@@ -835,7 +835,7 @@ static void cake_config_besteffort(struct Qdisc *sch)
 	for (i = 0; i < 64; i++)
 		q->bin_index[i] = 0;
 
-	cake_set_rate(b, rate, mtu, MS2TIME(5), MS2TIME(q->interval));
+	cake_set_rate(b, rate, mtu, MS2TIME(5), US2TIME(q->interval));
 	b->bin_quantum_band = 65535;
 	b->bin_quantum_prio = 65535;
 }
@@ -858,7 +858,7 @@ static void cake_config_precedence(struct Qdisc *sch)
 	for (i = 0; i < q->bin_cnt; i++) {
 		struct cake_bin_data *b = &q->bins[i];
 
-		cake_set_rate(b, rate, mtu, MS2TIME(5), MS2TIME(q->interval));
+		cake_set_rate(b, rate, mtu, MS2TIME(5), US2TIME(q->interval));
 
 		b->bin_quantum_prio = max_t(u16, 1U, quantum1);
 		b->bin_quantum_band = max_t(u16, 1U, quantum2);
@@ -971,7 +971,7 @@ static void cake_config_diffserv8(struct Qdisc *sch)
 	for (i = 0; i < q->bin_cnt; i++) {
 		struct cake_bin_data *b = &q->bins[i];
 
-		cake_set_rate(b, rate, mtu, MS2TIME(5), MS2TIME(q->interval));
+		cake_set_rate(b, rate, mtu, MS2TIME(5), US2TIME(q->interval));
 
 		b->bin_quantum_prio = max_t(u16, 1U, quantum1);
 		b->bin_quantum_band = max_t(u16, 1U, quantum2);
@@ -1034,13 +1034,13 @@ static void cake_config_diffserv4(struct Qdisc *sch)
 
 	/* class characteristics */
 	cake_set_rate(&q->bins[0], rate, mtu, MS2TIME(5),
-		      MS2TIME(q->interval));
+		      US2TIME(q->interval));
 	cake_set_rate(&q->bins[1], rate - (rate >> 4), mtu, MS2TIME(5),
-		      MS2TIME(q->interval));
+		      US2TIME(q->interval));
 	cake_set_rate(&q->bins[2], rate - (rate >> 2), mtu, MS2TIME(5),
-		      MS2TIME(q->interval));
+		      US2TIME(q->interval));
 	cake_set_rate(&q->bins[3], rate >> 2, mtu, MS2TIME(5),
-		      MS2TIME(q->interval));
+		      US2TIME(q->interval));
 
 	/* priority weights */
 	q->bins[0].bin_quantum_prio = quantum >> 4;
@@ -1140,11 +1140,11 @@ static int cake_change(struct Qdisc *sch, struct nlattr *opt)
 
 	if (tb[TCA_CAKE_RTT]) {
 		q->interval = nla_get_u32(tb[TCA_CAKE_RTT]);
-		if (10 > q->interval)
-			q->interval = 10;
+		if (500 > q->interval)
+			q->interval = 500;
 		else
-			if (1000 < q->interval)
-				q->interval = 1000;
+			if (1000000 < q->interval)
+				q->interval = 1000000;
 	}
 
 	if (q->bins) {
@@ -1201,7 +1201,7 @@ static int cake_init(struct Qdisc *sch, struct nlattr *opt)
 
 	q->rate_bps = 0; /* unlimited by default */
 
-	q->interval = 100; /* 100ms default */
+	q->interval = 100000; /* 100ms default */
 
 	q->cur_bin = 0;
 	q->cur_flow  = 0;
