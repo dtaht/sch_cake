@@ -180,6 +180,7 @@ struct cake_sched_data {
 	u32		rate_bps;
 	u16		rate_flags;
 	short	rate_overhead;
+	u32		interval;
 
 	/* resource tracking */
 	u32		buffer_used;
@@ -780,6 +781,7 @@ static const struct nla_policy cake_policy[TCA_CAKE_MAX + 1] = {
 	[TCA_CAKE_ATM]           = { .type = NLA_U32 },
 	[TCA_CAKE_FLOW_MODE]     = { .type = NLA_U32 },
 	[TCA_CAKE_OVERHEAD]      = { .type = NLA_U32 },
+	[TCA_CAKE_RTT]           = { .type = NLA_U32 },
 };
 
 static void cake_set_rate(struct cake_bin_data *b, u64 rate, u32 mtu,
@@ -833,7 +835,7 @@ static void cake_config_besteffort(struct Qdisc *sch)
 	for (i = 0; i < 64; i++)
 		q->bin_index[i] = 0;
 
-	cake_set_rate(b, rate, mtu, MS2TIME(5), MS2TIME(100));
+	cake_set_rate(b, rate, mtu, MS2TIME(5), MS2TIME(q->interval));
 	b->bin_quantum_band = 65535;
 	b->bin_quantum_prio = 65535;
 }
@@ -856,7 +858,7 @@ static void cake_config_precedence(struct Qdisc *sch)
 	for (i = 0; i < q->bin_cnt; i++) {
 		struct cake_bin_data *b = &q->bins[i];
 
-		cake_set_rate(b, rate, mtu, MS2TIME(5), MS2TIME(100));
+		cake_set_rate(b, rate, mtu, MS2TIME(5), MS2TIME(q->interval));
 
 		b->bin_quantum_prio = max_t(u16, 1U, quantum1);
 		b->bin_quantum_band = max_t(u16, 1U, quantum2);
@@ -969,7 +971,7 @@ static void cake_config_diffserv8(struct Qdisc *sch)
 	for (i = 0; i < q->bin_cnt; i++) {
 		struct cake_bin_data *b = &q->bins[i];
 
-		cake_set_rate(b, rate, mtu, MS2TIME(5), MS2TIME(100));
+		cake_set_rate(b, rate, mtu, MS2TIME(5), MS2TIME(q->interval));
 
 		b->bin_quantum_prio = max_t(u16, 1U, quantum1);
 		b->bin_quantum_band = max_t(u16, 1U, quantum2);
@@ -1031,13 +1033,14 @@ static void cake_config_diffserv4(struct Qdisc *sch)
 	}
 
 	/* class characteristics */
-	cake_set_rate(&q->bins[0], rate, mtu, MS2TIME(5), MS2TIME(100));
+	cake_set_rate(&q->bins[0], rate, mtu, MS2TIME(5),
+		      MS2TIME(q->interval));
 	cake_set_rate(&q->bins[1], rate - (rate >> 4), mtu, MS2TIME(5),
-		      MS2TIME(100));
+		      MS2TIME(q->interval));
 	cake_set_rate(&q->bins[2], rate - (rate >> 2), mtu, MS2TIME(5),
-		      MS2TIME(100));
+		      MS2TIME(q->interval));
 	cake_set_rate(&q->bins[3], rate >> 2, mtu, MS2TIME(5),
-		      MS2TIME(100));
+		      MS2TIME(q->interval));
 
 	/* priority weights */
 	q->bins[0].bin_quantum_prio = quantum >> 4;
@@ -1135,6 +1138,15 @@ static int cake_change(struct Qdisc *sch, struct nlattr *opt)
 	if (tb[TCA_CAKE_OVERHEAD])
 		q->rate_overhead = nla_get_u32(tb[TCA_CAKE_OVERHEAD]);
 
+	if (tb[TCA_CAKE_RTT]) {
+		q->interval = nla_get_u32(tb[TCA_CAKE_RTT]);
+		if (10 > q->interval)
+			q->interval = 10;
+		else
+			if (1000 < q->interval)
+				q->interval = 1000;
+	}
+
 	if (q->bins) {
 		sch_tree_lock(sch);
 		cake_reconfigure(sch);
@@ -1188,6 +1200,8 @@ static int cake_init(struct Qdisc *sch, struct nlattr *opt)
 	q->flow_mode  = CAKE_FLOW_FLOWS;
 
 	q->rate_bps = 0; /* unlimited by default */
+
+	q->interval = 100; /* 100ms default */
 
 	q->cur_bin = 0;
 	q->cur_flow  = 0;
@@ -1267,6 +1281,9 @@ static int cake_dump(struct Qdisc *sch, struct sk_buff *skb)
 		goto nla_put_failure;
 
 	if (nla_put_u32(skb, TCA_CAKE_OVERHEAD, q->rate_overhead))
+		goto nla_put_failure;
+
+	if (nla_put_u32(skb, TCA_CAKE_RTT, q->interval))
 		goto nla_put_failure;
 
 	return nla_nest_end(skb, opts);
