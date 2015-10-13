@@ -1315,34 +1315,37 @@ static int cake_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 
 	BUG_ON(q->bin_cnt > ARRAY_SIZE(st->bin));
 
-	st->type = 0xCAFE;
-	st->bin_cnt = q->bin_cnt;
+	st->version = 1;
+	st->max_tins = TC_CAKE_MAX_TINS;
+	st->tin_cnt = q->bin_cnt;
 
 	for (i = 0; i < q->bin_cnt; i++) {
 		struct cake_bin_data *b = &q->bins[i];
 
-		st->bin[i].rate          = b->bin_rate_bps;
-		st->bin[i].target_us     = codel_time_to_us(b->cparams.target);
-		st->bin[i].interval_us   =
+		st->threshold_rate[i]     = b->bin_rate_bps;
+		st->target_us[i]          = codel_time_to_us(b->cparams.target);
+		st->interval_us[i]        =
 			codel_time_to_us(b->cparams.interval);
-		st->bin[i].packets       = b->packets;
-		st->bin[i].bytes         = b->bytes;
-		st->bin[i].dropped       = b->bin_dropped;
-		st->bin[i].ecn_marked    = b->bin_ecn_mark;
-		st->bin[i].backlog_bytes = b->bin_backlog;
 
-		st->bin[i].peak_delay = codel_time_to_us(b->peak_delay);
-		st->bin[i].avge_delay = codel_time_to_us(b->avge_delay);
-		st->bin[i].base_delay = codel_time_to_us(b->base_delay);
+		/* TODO FIXME: add missing aspects of these composite stats */
+		st->sent[i].packets       = b->packets;
+		st->sent[i].bytes         = b->bytes;
+		st->dropped[i].packets    = b->bin_dropped;
+		st->ecn_marked[i].packets = b->bin_ecn_mark;
+		st->backlog[i].bytes      = b->bin_backlog;
 
-		st->bin[i].way_indirect_hits = b->way_hits;
-		st->bin[i].way_misses        = b->way_misses;
-		st->bin[i].way_collisions    = b->way_collisions;
+		st->peak_delay_us[i] = codel_time_to_us(b->peak_delay);
+		st->avge_delay_us[i] = codel_time_to_us(b->avge_delay);
+		st->base_delay_us[i] = codel_time_to_us(b->base_delay);
 
-		st->bin[i].sparse_flows      = b->sparse_flow_count;
-		st->bin[i].bulk_flows        = b->bulk_flow_count;
-		st->bin[i].last_skblen       = b->last_skblen;
-		st->bin[i].max_skblen        = b->max_skblen;
+		st->way_indirect_hits[i] = b->way_hits;
+		st->way_misses[i]        = b->way_misses;
+		st->way_collisions[i]    = b->way_collisions;
+
+		st->sparse_flows[i]      = b->sparse_flow_count;
+		st->bulk_flows[i]        = b->bulk_flow_count;
+		st->last_skblen[i]       = b->last_skblen;
+		st->max_skblen[i]        = b->max_skblen;
 	}
 
 	i = gnet_stats_copy_app(d, st, sizeof(*st));
