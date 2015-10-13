@@ -795,7 +795,7 @@ static void cake_set_rate(struct cake_bin_data *b, u64 rate, u32 mtu,
 	static const u64 MIN_RATE = 64;
 	u64 rate_ns = 0;
 	u8  rate_shft = 0;
-	u32 byte_target_ns;
+	codel_time_t byte_target_ns;
 	u32 byte_target = mtu + (mtu >> 1);
 
 	if (rate) {
