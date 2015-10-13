@@ -787,7 +787,7 @@ static const struct nla_policy cake_policy[TCA_CAKE_MAX + 1] = {
 };
 
 static void cake_set_rate(struct cake_bin_data *b, u64 rate, u32 mtu,
-			  u32 ns_target, u32 rtt_est_ns)
+			  codel_time_t ns_target, codel_time_t rtt_est_ns)
 {
 	/* convert byte-rate into time-per-byte
 	 * so it will always unwedge in reasonable time.
@@ -800,7 +800,7 @@ static void cake_set_rate(struct cake_bin_data *b, u64 rate, u32 mtu,
 
 	if (rate) {
 		rate_shft = 32;
-		rate_ns = ((u64)NSEC_PER_SEC) << rate_shft;
+		rate_ns = ((u64) NSEC_PER_SEC) << rate_shft;
 		do_div(rate_ns, max(MIN_RATE, rate));
 		while (!!(rate_ns >> 32)) {
 			rate_ns >>= 1;
