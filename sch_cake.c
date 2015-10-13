@@ -1313,7 +1313,7 @@ static int cake_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 	if (!st)
 		return -1;
 
-	BUG_ON(q->bin_cnt > ARRAY_SIZE(st->bin));
+	BUG_ON(q->bin_cnt > TC_CAKE_MAX_TINS);
 
 	st->version = 1;
 	st->max_tins = TC_CAKE_MAX_TINS;
