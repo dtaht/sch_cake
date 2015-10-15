@@ -289,9 +289,10 @@ static bool codel_should_drop(const struct sk_buff *skb,
 
 	} else if (vars->count > 1 && now - vars->drop_next < 8 * interval) {
 		/* we were recently dropping; be more aggressive */
-		return now - vars->first_above_time >
-				codel_control_law(now, interval,
-						  vars->rec_inv_sqrt);
+		return now > codel_control_law(
+						vars->first_above_time,
+						interval,
+						vars->rec_inv_sqrt);
 	} else if (((now - vars->first_above_time) >> 15) *
 		   ((now - codel_get_enqueue_time(skb)) >> 15) > threshold) {
 		return true;
