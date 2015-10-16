@@ -599,7 +599,7 @@ static int cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 
 		/* filter out short-term bursts, eg. wifi aggregation */
 		q->avg_packet_interval = cake_ewma(q->avg_packet_interval, packet_interval,
-					packet_interval > q->avg_packet_interval ? 4 : 16);
+					packet_interval > q->avg_packet_interval ? 2 : 8);
 		q->last_packet_time = now;
 
 		if(window_interval > q->avg_packet_interval * 4) {
@@ -607,7 +607,7 @@ static int cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 
 			do_div(b, window_interval);
 			q->avg_peak_bandwidth = cake_ewma(q->avg_peak_bandwidth, b,
-						b > q->avg_peak_bandwidth ? 4 : 16);
+						b > q->avg_peak_bandwidth ? 2 : 8);
 			q->avg_window_bytes = 0;
 			q->avg_window_begin = now;
 		}
