@@ -594,6 +594,9 @@ static int cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 		u64 packet_interval = now - q->last_packet_time;
 		u64 window_interval = now - q->avg_window_begin;
 
+		if(packet_interval > NSEC_PER_SEC)
+			packet_interval = NSEC_PER_SEC;
+
 		/* filter out short-term bursts, eg. wifi aggregation */
 		q->avg_packet_interval = cake_ewma(q->avg_packet_interval, packet_interval,
 					packet_interval > q->avg_packet_interval ? 4 : 16);
