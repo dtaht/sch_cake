@@ -1344,7 +1344,7 @@ static int cake_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 
 	BUG_ON(q->tin_cnt > TC_CAKE_MAX_TINS);
 
-	st->version = 1;
+	st->version = 2;
 	st->max_tins = TC_CAKE_MAX_TINS;
 	st->tin_cnt = q->tin_cnt;
 
