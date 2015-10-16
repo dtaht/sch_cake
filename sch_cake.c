@@ -600,7 +600,9 @@ static int cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 		q->last_packet_time = now;
 
 		if(window_interval > q->avg_packet_interval * 4) {
-			u32 b = (((u64) q->avg_window_bytes) * NSEC_PER_SEC) / window_interval;
+			u64 b = q->avg_window_bytes * (u64) NSEC_PER_SEC;
+
+			do_div(b, window_interval);
 			q->avg_peak_bandwidth = cake_ewma(q->avg_peak_bandwidth, b,
 						b > q->avg_peak_bandwidth ? 4 : 16);
 			q->avg_window_bytes = 0;
