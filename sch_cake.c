@@ -169,14 +169,14 @@ struct cake_tin_data {
 struct cake_sched_data {
 	struct cake_tin_data *tins;
 	u16		tin_cnt;
-	u16		tin_mode;
-	u16		flow_mode;
+	u8		tin_mode;
+	u8		flow_mode;
 
 	/* time_next = time_this + ((len * rate_ns) >> rate_shft) */
+	u16		peel_threshold;
 	u16		rate_shft;
 	u64		time_next_packet;
 	u32		rate_ns;
-	u16		peel_threshold;
 	u32		rate_bps;
 	u16		rate_flags;
 	short	rate_overhead;
@@ -193,6 +193,13 @@ struct cake_sched_data {
 
 	struct qdisc_watchdog watchdog;
 	u8		tin_index[64];
+
+	/* bandwidth capacity estimate */
+	u64		last_packet_time;
+	u64		avg_packet_interval;
+	u64		avg_window_begin;
+	u32		avg_window_bytes;
+	u32		avg_peak_bandwidth;
 };
 
 enum {
@@ -212,11 +219,11 @@ enum {
 	CAKE_FLOW_NONE = 0,
 	CAKE_FLOW_SRC_IP,
 	CAKE_FLOW_DST_IP,
-	CAKE_FLOW_HOSTS,
+	CAKE_FLOW_HOSTS,    /* = CAKE_FLOW_SRC_IP | CAKE_FLOW_DST_IP */
 	CAKE_FLOW_FLOWS,
-	CAKE_FLOW_DUAL_SRC,
-	CAKE_FLOW_DUAL_DST,
-	CAKE_FLOW_DUAL,
+	CAKE_FLOW_DUAL_SRC, /* = CAKE_FLOW_SRC_IP | CAKE_FLOW_FLOWS */
+	CAKE_FLOW_DUAL_DST, /* = CAKE_FLOW_DST_IP | CAKE_FLOW_FLOWS */
+	CAKE_FLOW_DUAL,     /* = CAKE_FLOW_HOSTS  | CAKE_FLOW_FLOWS */
 	CAKE_FLOW_MAX
 };
 
@@ -497,6 +504,7 @@ static int cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 	struct cake_tin_data *b;
 	struct cake_flow *flow;
 	u32 len = qdisc_pkt_len(skb);
+	u64 now = ktime_get_ns();
 
 	/* extract the Diffserv Precedence field, if it exists */
 	if (q->tin_mode != CAKE_MODE_SQUASH) {
@@ -505,7 +513,7 @@ static int cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 			tin = 0;
 	} else {
 		cake_squash_diffserv(skb);
-		tin = q->tin_index[0];
+		tin = 0;
 	}
 
 	b = &q->tins[tin];
@@ -516,8 +524,6 @@ static int cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 
 	/* ensure shaper state isn't stale */
 	if (!b->tin_backlog) {
-		u64 now = ktime_get_ns();
-
 		if (b->tin_time_next_packet < now)
 			b->tin_time_next_packet = now;
 
@@ -555,10 +561,11 @@ static int cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 			/* stats */
 			sch->q.qlen++;
 			b->packets++;
-			b->bytes         += segs->len;
-			b->backlogs[idx] += segs->len;
-			b->tin_backlog += segs->len;
+			b->bytes            += segs->len;
+			b->backlogs[idx]    += segs->len;
+			b->tin_backlog      += segs->len;
 			sch->qstats.backlog += segs->len;
+			q->avg_window_bytes += segs->len;
 			q->buffer_used      += segs->truesize;
 
 			segs = nskb;
@@ -574,11 +581,31 @@ static int cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 		/* stats */
 		sch->q.qlen++;
 		b->packets++;
-		b->bytes         += len;
-		b->backlogs[idx] += len;
-		b->tin_backlog += len;
+		b->bytes            += len;
+		b->backlogs[idx]    += len;
+		b->tin_backlog      += len;
 		sch->qstats.backlog += len;
+		q->avg_window_bytes += len;
 		q->buffer_used      += skb->truesize;
+	}
+
+	/* incoming bandwidth capacity estimate */
+	{
+		u64 packet_interval = now - q->last_packet_time;
+		u64 window_interval = now - q->avg_window_begin;
+
+		/* filter out short-term bursts, eg. wifi aggregation */
+		q->avg_packet_interval = cake_ewma(q->avg_packet_interval, packet_interval,
+					packet_interval > q->avg_packet_interval ? 4 : 16);
+		q->last_packet_time = now;
+
+		if(window_interval > avg_packet_interval * 4) {
+			u32 b = (((u64) q->avg_window_bytes) * NSEC_PER_SEC) / window_interval;
+			q->avg_peak_bandwidth = cake_ewma(q->avg_peak_bandwidth, b,
+						b > q->avg_peak_bandwidth ? 4 : 16);
+			q->avg_window_bytes = 0;
+			q->avg_window_begin = now;
+		}
 	}
 
 	/* flowchain */
@@ -1347,6 +1374,7 @@ static int cake_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 		st->last_skblen[i]       = b->last_skblen;
 		st->max_skblen[i]        = b->max_skblen;
 	}
+	st->capacity_estimate = q->avg_peak_bandwidth;
 
 	i = gnet_stats_copy_app(d, st, sizeof(*st));
 	cake_free(st);
