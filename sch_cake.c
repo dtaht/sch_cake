@@ -212,7 +212,8 @@ enum {
 };
 
 enum {
-	CAKE_FLAG_ATM = 0x0001
+	CAKE_FLAG_ATM = 0x0001,
+	CAKE_FLAG_AUTORATE_INGRESS = 0x0010
 };
 
 enum {
@@ -497,6 +498,8 @@ static inline unsigned int cake_get_diffserv(struct sk_buff *skb)
 	};
 }
 
+static void cake_reconfigure(struct Qdisc *sch);
+
 static int cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 {
 	struct cake_sched_data *q = qdisc_priv(sch);
@@ -602,7 +605,7 @@ static int cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 					packet_interval > q->avg_packet_interval ? 2 : 8);
 		q->last_packet_time = now;
 
-		if(window_interval > q->avg_packet_interval * 4) {
+		if(window_interval > q->avg_packet_interval * 16) {
 			u64 b = q->avg_window_bytes * (u64) NSEC_PER_SEC;
 
 			do_div(b, window_interval);
@@ -610,6 +613,11 @@ static int cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 						b > q->avg_peak_bandwidth ? 2 : 8);
 			q->avg_window_bytes = 0;
 			q->avg_window_begin = now;
+
+			if(q->rate_flags & CAKE_FLAG_AUTORATE_INGRESS) {
+				q->rate_bps = q->avg_peak_bandwidth * 7 / 8;
+				cake_reconfigure(sch);
+			}
 		}
 	}
 
@@ -1186,6 +1194,13 @@ static int cake_change(struct Qdisc *sch, struct nlattr *opt)
 			q->target = 1;
 	}
 
+	if (tb[TCA_CAKE_AUTORATE]) {
+		if (!!nla_get_u32(tb[TCA_CAKE_AUTORATE]))
+			q->rate_flags |= CAKE_FLAG_AUTORATE_INGRESS;
+		else
+			q->rate_flags &= ~CAKE_FLAG_AUTORATE_INGRESS;
+	}
+
 	if (q->tins) {
 		sch_tree_lock(sch);
 		cake_reconfigure(sch);
@@ -1286,6 +1301,7 @@ static int cake_init(struct Qdisc *sch, struct nlattr *opt)
 	}
 
 	cake_reconfigure(sch);
+	q->avg_peak_bandwidth = q->rate_bps;
 
 	if (q->rate_bps)
 		sch->flags &= ~TCQ_F_CAN_BYPASS;
@@ -1327,6 +1343,10 @@ static int cake_dump(struct Qdisc *sch, struct sk_buff *skb)
 		goto nla_put_failure;
 
 	if (nla_put_u32(skb, TCA_CAKE_TARGET, q->target))
+		goto nla_put_failure;
+
+	if (nla_put_u32(skb, TCA_CAKE_AUTORATE,
+			!!(q->rate_flags & CAKE_FLAG_AUTORATE_INGRESS)))
 		goto nla_put_failure;
 
 	return nla_nest_end(skb, opts);
