@@ -3,8 +3,9 @@ KERNEL_VERSION := $(shell uname -r)
 IDIR := /lib/modules/$(KERNEL_VERSION)/kernel/net/sched/
 KDIR := /lib/modules/$(KERNEL_VERSION)/build
 PWD := $(shell pwd)
+VERSION := $(shell git rev-parse HEAD || echo sha1)
 default:
-	$(MAKE) -C $(KDIR) SUBDIRS=$(PWD) modules
+	$(MAKE) -C $(KDIR) SUBDIRS=$(PWD) modules LDFLAGS_MODULE="--build-id=0x$(VERSION)"
 
 install:
 	install -v -m 644 sch_cake.ko $(IDIR)
