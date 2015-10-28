@@ -108,6 +108,11 @@
 #define CAKE_SET_WAYS (8)
 #define CAKE_MAX_TINS (8)
 
+#ifndef CAKE_VERSION
+#define CAKE_VERSION "unknown"
+#endif
+static char * cake_version = "Cake version: " CAKE_VERSION;
+
 struct cake_flow {
 	struct sk_buff	  *head;
 	struct sk_buff	  *tail;
@@ -1557,3 +1562,4 @@ module_init(cake_module_init)
 module_exit(cake_module_exit)
 MODULE_AUTHOR("Jonathan Morton");
 MODULE_LICENSE("Dual BSD/GPL");
+MODULE_DESCRIPTION("The Cake shaper. Version: " CAKE_VERSION);
