@@ -859,10 +859,11 @@ static void cake_set_rate(struct cake_tin_data *b, u64 rate, u32 mtu,
 
 	byte_target_ns = (byte_target * rate_ns) >> rate_shft;
 
+	b->cparams.target = max(byte_target_ns, ns_target);
 	b->cparams.interval = max(rtt_est_ns +
 				     b->cparams.target - ns_target,
 				     b->cparams.target * 8);
-	b->cparams.target = max(max(byte_target_ns, ns_target),
+	b->cparams.target = max(b->cparams.target,
 				b->cparams.interval >> 4);
 	b->cparams.threshold = (b->cparams.target >> 15) *
 		(b->cparams.interval >> 15) * 2;
