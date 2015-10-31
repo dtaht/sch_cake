@@ -200,6 +200,7 @@ struct cake_sched_data {
 	u64		avg_window_begin;
 	u32		avg_window_bytes;
 	u32		avg_peak_bandwidth;
+	u64		last_reconfig_time;
 };
 
 enum {
@@ -595,7 +596,6 @@ static int cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 	/* incoming bandwidth capacity estimate */
 	{
 		u64 packet_interval = now - q->last_packet_time;
-		u64 window_interval = now - q->avg_window_begin;
 
 		if(packet_interval > NSEC_PER_SEC)
 			packet_interval = NSEC_PER_SEC;
@@ -605,7 +605,8 @@ static int cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 					packet_interval > q->avg_packet_interval ? 2 : 8);
 		q->last_packet_time = now;
 
-		if(window_interval > q->avg_packet_interval * 16) {
+		if(packet_interval > q->avg_packet_interval) {
+			u64 window_interval = now - q->avg_window_begin;
 			u64 b = q->avg_window_bytes * (u64) NSEC_PER_SEC;
 
 			do_div(b, window_interval);
@@ -614,8 +615,8 @@ static int cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 			q->avg_window_bytes = 0;
 			q->avg_window_begin = now;
 
-			if(q->rate_flags & CAKE_FLAG_AUTORATE_INGRESS) {
-				q->rate_bps = q->avg_peak_bandwidth * 7 / 8;
+			if(q->rate_flags & CAKE_FLAG_AUTORATE_INGRESS && now - q->last_reconfig_time > (NSEC_PER_SEC / 4)) {
+				q->rate_bps = (q->avg_peak_bandwidth * 7) >> 3;
 				cake_reconfigure(sch);
 			}
 		}
@@ -1122,7 +1123,7 @@ static void cake_reconfigure(struct Qdisc *sch)
 		break;
 	};
 
-	BUG_ON(q->tin_cnt >= CAKE_MAX_TINS);
+	BUG_ON(q->tin_cnt > CAKE_MAX_TINS);
 	for (c = q->tin_cnt; c < CAKE_MAX_TINS; c++)
 		cake_clear_tin(sch, c);
 
