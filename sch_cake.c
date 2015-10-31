@@ -864,8 +864,6 @@ static void cake_set_rate(struct cake_tin_data *b, u64 rate, u32 mtu,
 	b->cparams.interval = max(rtt_est_ns +
 				     b->cparams.target - ns_target,
 				     b->cparams.target * 8);
-	b->cparams.target = max(b->cparams.target,
-				b->cparams.interval >> 4);
 	b->cparams.threshold = (b->cparams.target >> 15) *
 		(b->cparams.interval >> 15) * 2;
 
@@ -1152,7 +1150,7 @@ static void cake_reconfigure(struct Qdisc *sch)
 		q->peel_threshold = 0;
 	}
 
-	q->buffer_limit = max(q->buffer_limit, sch->limit *
+	q->buffer_limit = min(q->buffer_limit, sch->limit *
 			      psched_mtu(qdisc_dev(sch)));
 }
 
