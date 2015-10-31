@@ -108,6 +108,11 @@
 #define CAKE_SET_WAYS (8)
 #define CAKE_MAX_TINS (8)
 
+#ifndef CAKE_VERSION
+#define CAKE_VERSION "unknown"
+#endif
+static char * cake_version = "Cake version: " CAKE_VERSION;
+
 struct cake_flow {
 	struct sk_buff	  *head;
 	struct sk_buff	  *tail;
@@ -859,6 +864,8 @@ static void cake_set_rate(struct cake_tin_data *b, u64 rate, u32 mtu,
 	b->cparams.interval = max(rtt_est_ns +
 				     b->cparams.target - ns_target,
 				     b->cparams.target * 8);
+	b->cparams.target = max(b->cparams.target,
+				b->cparams.interval >> 4);
 	b->cparams.threshold = (b->cparams.target >> 15) *
 		(b->cparams.interval >> 15) * 2;
 
@@ -1145,7 +1152,7 @@ static void cake_reconfigure(struct Qdisc *sch)
 		q->peel_threshold = 0;
 	}
 
-	q->buffer_limit = min(q->buffer_limit, sch->limit *
+	q->buffer_limit = max(q->buffer_limit, sch->limit *
 			      psched_mtu(qdisc_dev(sch)));
 }
 
@@ -1557,3 +1564,4 @@ module_init(cake_module_init)
 module_exit(cake_module_exit)
 MODULE_AUTHOR("Jonathan Morton");
 MODULE_LICENSE("Dual BSD/GPL");
+MODULE_DESCRIPTION("The Cake shaper. Version: " CAKE_VERSION);
