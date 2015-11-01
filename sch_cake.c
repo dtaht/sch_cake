@@ -111,7 +111,7 @@
 #ifndef CAKE_VERSION
 #define CAKE_VERSION "unknown"
 #endif
-static char * cake_version = "Cake version: " CAKE_VERSION;
+static char *cake_version = "Cake version: " CAKE_VERSION;
 
 struct cake_flow {
 	struct sk_buff	  *head;
@@ -602,25 +602,30 @@ static int cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 	{
 		u64 packet_interval = now - q->last_packet_time;
 
-		if(packet_interval > NSEC_PER_SEC)
+		if (packet_interval > NSEC_PER_SEC)
 			packet_interval = NSEC_PER_SEC;
 
 		/* filter out short-term bursts, eg. wifi aggregation */
-		q->avg_packet_interval = cake_ewma(q->avg_packet_interval, packet_interval,
-					packet_interval > q->avg_packet_interval ? 2 : 8);
+		q->avg_packet_interval = cake_ewma(q->avg_packet_interval,
+			packet_interval,
+			packet_interval > q->avg_packet_interval ? 2 : 8);
+
 		q->last_packet_time = now;
 
-		if(packet_interval > q->avg_packet_interval) {
+		if (packet_interval > q->avg_packet_interval) {
 			u64 window_interval = now - q->avg_window_begin;
 			u64 b = q->avg_window_bytes * (u64) NSEC_PER_SEC;
 
 			do_div(b, window_interval);
-			q->avg_peak_bandwidth = cake_ewma(q->avg_peak_bandwidth, b,
-						b > q->avg_peak_bandwidth ? 2 : 8);
+			q->avg_peak_bandwidth =
+				cake_ewma(q->avg_peak_bandwidth, b,
+					b > q->avg_peak_bandwidth ? 2 : 8);
 			q->avg_window_bytes = 0;
 			q->avg_window_begin = now;
 
-			if(q->rate_flags & CAKE_FLAG_AUTORATE_INGRESS && now - q->last_reconfig_time > (NSEC_PER_SEC / 4)) {
+			if (q->rate_flags & CAKE_FLAG_AUTORATE_INGRESS &&
+				now - q->last_reconfig_time >
+				(NSEC_PER_SEC / 4)) {
 				q->rate_bps = (q->avg_peak_bandwidth * 7) >> 3;
 				cake_reconfigure(sch);
 			}
@@ -906,7 +911,8 @@ static void cake_config_precedence(struct Qdisc *sch)
 	for (i = 0; i < q->tin_cnt; i++) {
 		struct cake_tin_data *b = &q->tins[i];
 
-		cake_set_rate(b, rate, mtu, US2TIME(q->target), US2TIME(q->interval));
+		cake_set_rate(b, rate, mtu, US2TIME(q->target),
+				US2TIME(q->interval));
 
 		b->tin_quantum_prio = max_t(u16, 1U, quantum1);
 		b->tin_quantum_band = max_t(u16, 1U, quantum2);
@@ -1019,7 +1025,8 @@ static void cake_config_diffserv8(struct Qdisc *sch)
 	for (i = 0; i < q->tin_cnt; i++) {
 		struct cake_tin_data *b = &q->tins[i];
 
-		cake_set_rate(b, rate, mtu, US2TIME(q->target), US2TIME(q->interval));
+		cake_set_rate(b, rate, mtu, US2TIME(q->target),
+				US2TIME(q->interval));
 
 		b->tin_quantum_prio = max_t(u16, 1U, quantum1);
 		b->tin_quantum_band = max_t(u16, 1U, quantum2);
@@ -1262,7 +1269,10 @@ static int cake_init(struct Qdisc *sch, struct nlattr *opt)
 	q->rate_bps = 0; /* unlimited by default */
 
 	q->interval = 100000; /* 100ms default */
-	q->target   = q->interval >> 4; /* 6.2ms: the codel RFC argues for 5 to 10% of interval, 1/16th or 6.25% falls nicely into this range */
+	q->target   = q->interval >> 4; /* 6.2ms: the codel RFC argues
+					   for 5 to 10% of interval, 1/16th
+					   or 6.25% falls nicely into this
+					   range */
 
 	q->cur_tin = 0;
 	q->cur_flow  = 0;
