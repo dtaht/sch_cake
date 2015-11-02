@@ -111,7 +111,8 @@
 #ifndef CAKE_VERSION
 #define CAKE_VERSION "unknown"
 #endif
-static char *cake_version = "Cake version: " CAKE_VERSION;
+static char *cake_version __attribute__((used)) = "Cake version: "
+		CAKE_VERSION;
 
 struct cake_flow {
 	struct sk_buff	  *head;
