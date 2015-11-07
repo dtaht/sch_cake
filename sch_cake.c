@@ -1221,6 +1221,9 @@ static int cake_change(struct Qdisc *sch, struct nlattr *opt)
 			q->rate_flags &= ~CAKE_FLAG_AUTORATE_INGRESS;
 	}
 
+	if (tb[TCA_CAKE_MEMORY])
+		q->buffer_config_limit = nla_get_s32(tb[TCA_CAKE_MEMORY]);
+
 	if (q->tins) {
 		sch_tree_lock(sch);
 		cake_reconfigure(sch);
@@ -1370,6 +1373,9 @@ static int cake_dump(struct Qdisc *sch, struct sk_buff *skb)
 			!!(q->rate_flags & CAKE_FLAG_AUTORATE_INGRESS)))
 		goto nla_put_failure;
 
+	if (nla_put_u32(skb, TCA_CAKE_MEMORY, q->buffer_config_limit))
+		goto nla_put_failure;
+
 	return nla_nest_end(skb, opts);
 
 nla_put_failure:
@@ -1388,7 +1394,7 @@ static int cake_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 
 	BUG_ON(q->tin_cnt > TC_CAKE_MAX_TINS);
 
-	st->version = 2;
+	st->version = 3;
 	st->max_tins = TC_CAKE_MAX_TINS;
 	st->tin_cnt = q->tin_cnt;
 
