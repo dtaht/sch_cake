@@ -190,7 +190,9 @@ struct cake_sched_data {
 
 	/* resource tracking */
 	u32		buffer_used;
+	u32		buffer_max_used;
 	u32		buffer_limit;
+	u32		buffer_config_limit;
 
 	/* indices for dequeue */
 	u16		cur_tin;
@@ -634,6 +636,9 @@ static int cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 		flow->deficit = b->quantum;
 		flow->dropped = 0;
 	}
+
+	if (q->buffer_used > q->buffer_max_used)
+		q->buffer_max_used = q->buffer_used;
 
 	if (q->buffer_used > q->buffer_limit) {
 		bool same_flow = false;
@@ -1139,9 +1144,7 @@ static void cake_reconfigure(struct Qdisc *sch)
 		u64 t = q->rate_bps * q->interval;
 
 		do_div(t, USEC_PER_SEC / 4);
-		q->buffer_limit = t;
-		if (q->buffer_limit < 65536)
-			q->buffer_limit = 65536;
+		q->buffer_limit = max((u32) t, 65536);
 
 		q->peel_threshold = (q->rate_flags & CAKE_FLAG_ATM) ?
 			0 : min(65535U, q->rate_bps >> 12);
@@ -1150,8 +1153,11 @@ static void cake_reconfigure(struct Qdisc *sch)
 		q->peel_threshold = 0;
 	}
 
-	q->buffer_limit = min(q->buffer_limit, sch->limit *
-			      psched_mtu(qdisc_dev(sch)));
+	if(q->buffer_config_limit)
+		q->buffer_limit = min(q->buffer_limit, q->buffer_config_limit);
+	else
+		q->buffer_limit = min(q->buffer_limit, sch->limit *
+				      psched_mtu(qdisc_dev(sch)));
 }
 
 static int cake_change(struct Qdisc *sch, struct nlattr *opt)
@@ -1406,6 +1412,8 @@ static int cake_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 		st->max_skblen[i]        = b->max_skblen;
 	}
 	st->capacity_estimate = q->avg_peak_bandwidth;
+	st->memory_limit      = q->buffer_limit;
+	st->memory_used       = q->buffer_max_used;
 
 	i = gnet_stats_copy_app(d, st, sizeof(*st));
 	cake_free(st);
