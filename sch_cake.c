@@ -841,6 +841,7 @@ static const struct nla_policy cake_policy[TCA_CAKE_MAX + 1] = {
 	[TCA_CAKE_OVERHEAD]      = { .type = NLA_S32 },
 	[TCA_CAKE_RTT]           = { .type = NLA_U32 },
 	[TCA_CAKE_TARGET]        = { .type = NLA_U32 },
+	[TCA_CAKE_MEMORY]        = { .type = NLA_U32 },
 };
 
 static void cake_set_rate(struct cake_tin_data *b, u64 rate, u32 mtu,
@@ -1148,8 +1149,10 @@ static void cake_reconfigure(struct Qdisc *sch)
 	q->rate_ns   = q->tins[0].tin_rate_ns;
 	q->rate_shft = q->tins[0].tin_rate_shft;
 
-	if (q->rate_bps) {
-		u64 t = q->rate_bps * q->interval;
+	if (q->buffer_config_limit) {
+		q->buffer_limit = q->buffer_config_limit;
+	} else if (q->rate_bps) {
+		u64 t = (u64) q->rate_bps * q->interval;
 
 		do_div(t, USEC_PER_SEC / 4);
 		q->buffer_limit = max((u32) t, 65536U);
@@ -1157,15 +1160,13 @@ static void cake_reconfigure(struct Qdisc *sch)
 		q->peel_threshold = (q->rate_flags & CAKE_FLAG_ATM) ?
 			0 : min(65535U, q->rate_bps >> 12);
 	} else {
-		q->buffer_limit = 1 << 20;
+		q->buffer_limit = ~0;
 		q->peel_threshold = 0;
 	}
 
-	if(q->buffer_config_limit)
-		q->buffer_limit = min(q->buffer_limit, q->buffer_config_limit);
-	else
-		q->buffer_limit = min(q->buffer_limit, sch->limit *
-				      psched_mtu(qdisc_dev(sch)));
+	q->buffer_limit = min(q->buffer_limit, sch->limit *
+			      psched_mtu(qdisc_dev(sch)));
+	q->buffer_max_used = 0;
 }
 
 static int cake_change(struct Qdisc *sch, struct nlattr *opt)
