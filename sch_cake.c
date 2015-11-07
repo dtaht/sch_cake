@@ -1164,9 +1164,9 @@ static void cake_reconfigure(struct Qdisc *sch)
 		q->peel_threshold = 0;
 	}
 
-	q->buffer_limit = min(q->buffer_limit, sch->limit *
-			      psched_mtu(qdisc_dev(sch)));
-	q->buffer_max_used = 0;
+	q->buffer_limit = min(q->buffer_limit,
+		max(sch->limit * psched_mtu(qdisc_dev(sch)),
+		    q->buffer_config_limit));
 }
 
 static int cake_change(struct Qdisc *sch, struct nlattr *opt)
