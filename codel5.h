@@ -69,6 +69,18 @@ static inline u32 reciprocal_scale(u32 val, u32 ep_ro)
 
 #endif
 
+#if KERNEL_VERSION(3, 15, 0) > LINUX_VERSION_CODE
+
+static inline void kvfree(const void *addr)
+{
+	if (is_vmalloc_addr(addr))
+		vfree(addr);
+	else
+		kfree(addr);
+}
+
+#endif
+
 #if KERNEL_VERSION(3, 17, 0) > LINUX_VERSION_CODE
 
 #define ktime_get_ns() ktime_to_ns(ktime_get())
@@ -98,20 +110,13 @@ static inline void qdisc_qstats_drop(struct Qdisc *sch)
 	sch->qstats.drops++;
 }
 
-static inline void kvfree(const void *addr)
-{
-	if (is_vmalloc_addr(addr))
-		vfree(addr);
-	else
-		kfree(addr);
-}
-
 #define codel_stats_copy_queue(a, b, c, d) gnet_stats_copy_queue(a, c)
 #define codel_watchdog_schedule_ns(a, b, c) qdisc_watchdog_schedule_ns(a, b)
 #else
 #define codel_stats_copy_queue(a, b, c, d) gnet_stats_copy_queue(a, b, c, d)
 #define codel_watchdog_schedule_ns(a, b, c) qdisc_watchdog_schedule_ns(a, b, c)
 #endif
+
 
 /* CoDel5 uses a real clock, unlike codel */
 
