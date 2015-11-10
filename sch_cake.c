@@ -174,9 +174,10 @@ struct cake_tin_data {
 
 struct cake_sched_data {
 	struct cake_tin_data *tins;
-	u16		tin_cnt;
+	u8		tin_cnt;
 	u8		tin_mode;
 	u8		flow_mode;
+	u8		squash;
 
 	/* time_next = time_this + ((len * rate_ns) >> rate_shft) */
 	u16		peel_threshold;
@@ -185,7 +186,7 @@ struct cake_sched_data {
 	u32		rate_ns;
 	u32		rate_bps;
 	u16		rate_flags;
-	short	rate_overhead;
+	short		rate_overhead;
 	u32		interval;
 	u32		target;
 
@@ -216,7 +217,6 @@ enum {
 	CAKE_MODE_PRECEDENCE,
 	CAKE_MODE_DIFFSERV8,
 	CAKE_MODE_DIFFSERV4,
-	CAKE_MODE_SQUASH,
 	CAKE_MODE_MAX
 };
 
@@ -519,14 +519,17 @@ static int cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 	u64 now = ktime_get_ns();
 
 	/* extract the Diffserv Precedence field, if it exists */
-	if (q->tin_mode != CAKE_MODE_SQUASH) {
+	if (q->tin_mode != CAKE_MODE_BESTEFFORT) {
 		tin = q->tin_index[cake_get_diffserv(skb)];
 		if (unlikely(tin >= q->tin_cnt))
 			tin = 0;
 	} else {
-		cake_squash_diffserv(skb);
 		tin = 0;
 	}
+
+	/* now clear DSCP bits if squashing */
+	if (q->squash)
+		cake_squash_diffserv(skb);
 
 	b = &q->tins[tin];
 
@@ -842,6 +845,7 @@ static const struct nla_policy cake_policy[TCA_CAKE_MAX + 1] = {
 	[TCA_CAKE_RTT]           = { .type = NLA_U32 },
 	[TCA_CAKE_TARGET]        = { .type = NLA_U32 },
 	[TCA_CAKE_MEMORY]        = { .type = NLA_U32 },
+	[TCA_CAKE_SQUASH]        = { .type = NLA_U32 },
 };
 
 static void cake_set_rate(struct cake_tin_data *b, u64 rate, u32 mtu,
@@ -1123,7 +1127,6 @@ static void cake_reconfigure(struct Qdisc *sch)
 	int c;
 
 	switch (q->tin_mode) {
-	case CAKE_MODE_SQUASH:
 	case CAKE_MODE_BESTEFFORT:
 	default:
 		cake_config_besteffort(sch);
@@ -1194,6 +1197,9 @@ static int cake_change(struct Qdisc *sch, struct nlattr *opt)
 		else
 			q->rate_flags &= ~CAKE_FLAG_ATM;
 	}
+
+	if (tb[TCA_CAKE_SQUASH])
+		q->squash = nla_get_u32(tb[TCA_CAKE_SQUASH]);
 
 	if (tb[TCA_CAKE_FLOW_MODE])
 		q->flow_mode = nla_get_u32(tb[TCA_CAKE_FLOW_MODE]);
@@ -1276,6 +1282,7 @@ static int cake_init(struct Qdisc *sch, struct nlattr *opt)
 	sch->limit = 10240;
 	q->tin_mode = CAKE_MODE_DIFFSERV4;
 	q->flow_mode  = CAKE_FLOW_FLOWS;
+	q->squash = 0; /* not DSCP squashing by default */
 
 	q->rate_bps = 0; /* unlimited by default */
 
@@ -1359,6 +1366,9 @@ static int cake_dump(struct Qdisc *sch, struct sk_buff *skb)
 		goto nla_put_failure;
 
 	if (nla_put_u32(skb, TCA_CAKE_FLOW_MODE, q->flow_mode))
+		goto nla_put_failure;
+
+	if (nla_put_u32(skb, TCA_CAKE_SQUASH, q->squash))
 		goto nla_put_failure;
 
 	if (nla_put_u32(skb, TCA_CAKE_OVERHEAD, q->rate_overhead))
