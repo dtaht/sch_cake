@@ -482,10 +482,10 @@ static inline void cake_squash_diffserv(struct sk_buff *skb)
 {
 	switch (skb->protocol) {
 	case htons(ETH_P_IP):
-		ipv4_change_dsfield(ip_hdr(skb), 3, 0);
+		ipv4_change_dsfield(ip_hdr(skb), INET_ECN_MASK, 0);
 		break;
 	case htons(ETH_P_IPV6):
-		ipv6_change_dsfield(ipv6_hdr(skb), 3, 0);
+		ipv6_change_dsfield(ipv6_hdr(skb), INET_ECN_MASK, 0);
 		break;
 	default:
 		break;
