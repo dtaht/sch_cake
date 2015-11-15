@@ -492,14 +492,22 @@ static inline void cake_squash_diffserv(struct sk_buff *skb)
 	};
 }
 
-static inline unsigned int cake_get_diffserv(struct sk_buff *skb)
+static inline unsigned int cake_handle_diffserv(struct sk_buff *skb, u8 squash)
 {
+	unsigned int dscp;
+
 	switch (skb->protocol) {
 	case htons(ETH_P_IP):
-		return ipv4_get_dsfield(ip_hdr(skb)) >> 2;
+		dscp = ipv4_get_dsfield(ip_hdr(skb)) >> 2;
+		if (squash && dscp)
+			ipv4_change_dsfield(ip_hdr(skb), INET_ECN_MASK, 0);
+		return dscp;
 
 	case htons(ETH_P_IPV6):
-		return ipv6_get_dsfield(ipv6_hdr(skb)) >> 2;
+		dscp = ipv6_get_dsfield(ipv6_hdr(skb)) >> 2;
+		if (squash && dscp)
+			ipv6_change_dsfield(ipv6_hdr(skb), INET_ECN_MASK, 0);
+		return dscp;
 
 	default:
 		/* If there is no Diffserv field, treat as bulk */
@@ -519,17 +527,16 @@ static int cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 	u64 now = ktime_get_ns();
 
 	/* extract the Diffserv Precedence field, if it exists */
+	/* and clear DSCP bits if squashing */
 	if (q->tin_mode != CAKE_MODE_BESTEFFORT) {
-		tin = q->tin_index[cake_get_diffserv(skb)];
+		tin = q->tin_index[cake_handle_diffserv(skb, q->squash)];
 		if (unlikely(tin >= q->tin_cnt))
 			tin = 0;
 	} else {
 		tin = 0;
+		if (q->squash)
+			cake_squash_diffserv(skb);
 	}
-
-	/* now clear DSCP bits if squashing */
-	if (q->squash)
-		cake_squash_diffserv(skb);
 
 	b = &q->tins[tin];
 
