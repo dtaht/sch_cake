@@ -174,10 +174,9 @@ struct cake_tin_data {
 
 struct cake_sched_data {
 	struct cake_tin_data *tins;
-	u8		tin_cnt;
+	u16		tin_cnt;
 	u8		tin_mode;
 	u8		flow_mode;
-	u8		squash;
 
 	/* time_next = time_this + ((len * rate_ns) >> rate_shft) */
 	u16		peel_threshold;
@@ -222,7 +221,8 @@ enum {
 
 enum {
 	CAKE_FLAG_ATM = 0x0001,
-	CAKE_FLAG_AUTORATE_INGRESS = 0x0010
+	CAKE_FLAG_AUTORATE_INGRESS = 0x0010,
+	CAKE_FLAG_SQUASH = 0x0100
 };
 
 enum {
@@ -492,7 +492,7 @@ static inline void cake_squash_diffserv(struct sk_buff *skb)
 	};
 }
 
-static inline unsigned int cake_handle_diffserv(struct sk_buff *skb, u8 squash)
+static inline unsigned int cake_handle_diffserv(struct sk_buff *skb, u16 squash)
 {
 	unsigned int dscp;
 
@@ -529,12 +529,13 @@ static int cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 	/* extract the Diffserv Precedence field, if it exists */
 	/* and clear DSCP bits if squashing */
 	if (q->tin_mode != CAKE_MODE_BESTEFFORT) {
-		tin = q->tin_index[cake_handle_diffserv(skb, q->squash)];
+		tin = q->tin_index[cake_handle_diffserv(skb,
+				q->rate_flags & CAKE_FLAG_SQUASH)];
 		if (unlikely(tin >= q->tin_cnt))
 			tin = 0;
 	} else {
 		tin = 0;
-		if (q->squash)
+		if (q->rate_flags & CAKE_FLAG_SQUASH)
 			cake_squash_diffserv(skb);
 	}
 
@@ -1205,8 +1206,12 @@ static int cake_change(struct Qdisc *sch, struct nlattr *opt)
 			q->rate_flags &= ~CAKE_FLAG_ATM;
 	}
 
-	if (tb[TCA_CAKE_SQUASH])
-		q->squash = nla_get_u32(tb[TCA_CAKE_SQUASH]);
+	if (tb[TCA_CAKE_SQUASH]) {
+		if (!!nla_get_u32(tb[TCA_CAKE_SQUASH]))
+			q->rate_flags |= CAKE_FLAG_SQUASH;
+		else
+			q->rate_flags &= ~CAKE_FLAG_SQUASH;
+	}
 
 	if (tb[TCA_CAKE_FLOW_MODE])
 		q->flow_mode = nla_get_u32(tb[TCA_CAKE_FLOW_MODE]);
@@ -1289,7 +1294,6 @@ static int cake_init(struct Qdisc *sch, struct nlattr *opt)
 	sch->limit = 10240;
 	q->tin_mode = CAKE_MODE_DIFFSERV4;
 	q->flow_mode  = CAKE_FLOW_FLOWS;
-	q->squash = 0; /* not DSCP squashing by default */
 
 	q->rate_bps = 0; /* unlimited by default */
 
@@ -1375,7 +1379,8 @@ static int cake_dump(struct Qdisc *sch, struct sk_buff *skb)
 	if (nla_put_u32(skb, TCA_CAKE_FLOW_MODE, q->flow_mode))
 		goto nla_put_failure;
 
-	if (nla_put_u32(skb, TCA_CAKE_SQUASH, q->squash))
+	if (nla_put_u32(skb, TCA_CAKE_SQUASH,
+			!!(q->rate_flags & CAKE_FLAG_SQUASH)))
 		goto nla_put_failure;
 
 	if (nla_put_u32(skb, TCA_CAKE_OVERHEAD, q->rate_overhead))
