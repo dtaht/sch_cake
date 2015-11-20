@@ -524,7 +524,7 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 	struct cake_tin_data *b;
 	struct cake_flow *flow;
 	u32 len = qdisc_pkt_len(skb);
-	u64 now = ktime_get_ns();
+	u64 now = codel_get_time();
 
 	/* extract the Diffserv Precedence field, if it exists */
 	/* and clear DSCP bits if washing */
@@ -577,8 +577,7 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 			nskb = segs->next;
 			segs->next = NULL;
 			qdisc_skb_cb(segs)->pkt_len = segs->len;
-
-			codel_set_enqueue_time(segs);
+			get_codel_cb(segs)->enqueue_time = now;
 			flow_queue_add(flow, segs);
 
 			/* stats */
@@ -598,7 +597,7 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 		consume_skb(skb);
 	} else {
 		/* not splitting */
-		codel_set_enqueue_time(skb);
+		get_codel_cb(skb)->enqueue_time = now;
 		flow_queue_add(flow, skb);
 
 		/* stats */

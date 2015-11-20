@@ -147,11 +147,6 @@ static codel_time_t codel_get_enqueue_time(const struct sk_buff *skb)
 	return get_codel_cb(skb)->enqueue_time;
 }
 
-static void codel_set_enqueue_time(struct sk_buff *skb)
-{
-	get_codel_cb(skb)->enqueue_time = codel_get_time();
-}
-
 static inline u32 codel_time_to_us(codel_time_t val)
 {
 	do_div(val, NSEC_PER_USEC);
