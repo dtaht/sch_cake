@@ -237,7 +237,7 @@ enum {
 	CAKE_FLOW_MAX
 };
 
-static inline unsigned int
+static inline u32
 cake_hash(struct cake_tin_data *q, const struct sk_buff *skb, int flow_mode)
 {
 #if KERNEL_VERSION(4, 2, 0) > LINUX_VERSION_CODE
@@ -492,7 +492,7 @@ static inline void cake_wash_diffserv(struct sk_buff *skb)
 	};
 }
 
-static inline unsigned int cake_handle_diffserv(struct sk_buff *skb, u16 wash)
+static inline u32 cake_handle_diffserv(struct sk_buff *skb, u16 wash)
 {
 	u32 dscp;
 
