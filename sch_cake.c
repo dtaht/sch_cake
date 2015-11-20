@@ -147,7 +147,7 @@ struct cake_tin_data {
 	/* time_next = time_this + ((len * rate_ns) >> rate_shft) */
 	u64	tin_time_next_packet;
 	u32	tin_rate_ns;
-	int	tin_rate_shft;
+	u16	tin_rate_shft;
 	u32	tin_rate_bps;
 
 	u16	tin_quantum_prio;
