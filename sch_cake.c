@@ -118,7 +118,7 @@ struct cake_flow {
 	struct sk_buff	  *head;
 	struct sk_buff	  *tail;
 	struct list_head  flowchain;
-	int		  deficit;
+	s32		  deficit;
 	u32		  dropped; /* Drops (or ECN marks) on this flow */
 	struct codel_vars cvars;
 }; /* please try to keep this structure <= 64 bytes */
@@ -152,7 +152,7 @@ struct cake_tin_data {
 
 	u16	tin_quantum_prio;
 	u16	tin_quantum_band;
-	int	tin_deficit;
+	s32	tin_deficit;
 	u32	tin_backlog;
 	u32	tin_dropped;
 	u32	tin_ecn_mark;
@@ -185,7 +185,7 @@ struct cake_sched_data {
 	u32		rate_ns;
 	u32		rate_bps;
 	u16		rate_flags;
-	short		rate_overhead;
+	s16		rate_overhead;
 	u32		interval;
 	u32		target;
 
@@ -414,7 +414,7 @@ static inline u32 cake_overhead(struct cake_sched_data *q, u32 in)
 }
 
 static inline codel_time_t cake_ewma(codel_time_t avg, codel_time_t sample,
-				     int shift)
+				     u32 shift)
 {
 	avg -= avg >> shift;
 	avg += sample >> shift;
@@ -494,7 +494,7 @@ static inline void cake_wash_diffserv(struct sk_buff *skb)
 
 static inline unsigned int cake_handle_diffserv(struct sk_buff *skb, u16 wash)
 {
-	unsigned int dscp;
+	u32 dscp;
 
 	switch (skb->protocol) {
 	case htons(ETH_P_IP):
@@ -517,10 +517,10 @@ static inline unsigned int cake_handle_diffserv(struct sk_buff *skb, u16 wash)
 
 static void cake_reconfigure(struct Qdisc *sch);
 
-static int cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
+static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 {
 	struct cake_sched_data *q = qdisc_priv(sch);
-	unsigned int idx, tin;
+	u32 idx, tin;
 	struct cake_tin_data *b;
 	struct cake_flow *flow;
 	u32 len = qdisc_pkt_len(skb);
@@ -718,7 +718,7 @@ static struct sk_buff *cake_dequeue(struct Qdisc *sch)
 	u32 prev_drop_count, prev_ecn_mark;
 	u32 len;
 	u64 now = ktime_get_ns();
-	int i;
+	s32 i;
 	codel_time_t delay;
 
 begin:
@@ -838,7 +838,7 @@ retry:
 
 static void cake_reset(struct Qdisc *sch)
 {
-	int c;
+	u32 c;
 
 	for (c = 0; c < CAKE_MAX_TINS; c++)
 		cake_clear_tin(sch, c);
@@ -900,7 +900,7 @@ static void cake_config_besteffort(struct Qdisc *sch)
 	struct cake_tin_data *b = &q->tins[0];
 	u64 rate = q->rate_bps;
 	u32 mtu = psched_mtu(qdisc_dev(sch));
-	unsigned int i;
+	u32 i;
 
 	q->tin_cnt = 1;
 
