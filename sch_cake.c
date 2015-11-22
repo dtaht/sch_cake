@@ -778,9 +778,7 @@ retry:
 	prev_drop_count = flow->cvars.drop_count;
 	prev_ecn_mark   = flow->cvars.ecn_mark;
 
-	skb = codel_dequeue(sch, &flow->cvars, b->cparams.interval,
-			    b->cparams.target, b->cparams.threshold,
-			    q->buffer_used >
+	skb = codel_dequeue(sch, &flow->cvars, &b->cparams, q->buffer_used >
 			    (q->buffer_limit >> 2) + (q->buffer_limit >> 1));
 
 	b->tin_dropped  += flow->cvars.drop_count - prev_drop_count;
@@ -1298,7 +1296,8 @@ static int cake_init(struct Qdisc *sch, struct nlattr *opt)
 
 	q->interval = 100000; /* 100ms default */
 	q->target   =   5000; /* 5ms: codel RFC argues
-				 for 5 to 10% of interval */
+			       * for 5 to 10% of interval
+			       */
 
 	q->cur_tin = 0;
 	q->cur_flow  = 0;
