@@ -58,7 +58,7 @@
  * Implemented on linux by Dave Taht and Eric Dumazet
  */
 
-#if KERNEL_VERSION(4, 2, 0) > LINUX_VERSION_CODE
+#if KERNEL_VERSION(3, 18, 0) > LINUX_VERSION_CODE
 #include "codel5_compat.h"
 #else
 #define codel_stats_copy_queue(a, b, c, d) gnet_stats_copy_queue(a, b, c, d)
