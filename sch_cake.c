@@ -567,7 +567,7 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 		      q->peel_threshold && skb_is_gso(skb)))) {
 		struct sk_buff *segs, *nskb;
 		netdev_features_t features = netif_skb_features(skb);
-
+		u32 slen = 0;
 		segs = skb_gso_segment(skb, features & ~NETIF_F_GSO_MASK);
 
 		if (IS_ERR_OR_NULL(segs))
@@ -579,19 +579,19 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 			qdisc_skb_cb(segs)->pkt_len = segs->len;
 			get_codel_cb(segs)->enqueue_time = now;
 			flow_queue_add(flow, segs);
-
 			/* stats */
 			sch->q.qlen++;
 			b->packets++;
-			b->bytes            += segs->len;
-			b->backlogs[idx]    += segs->len;
-			b->tin_backlog      += segs->len;
-			sch->qstats.backlog += segs->len;
-			q->avg_window_bytes += segs->len;
+			slen += segs->len;
 			q->buffer_used      += segs->truesize;
-
 			segs = nskb;
 		}
+
+		b->bytes            += slen;
+		b->backlogs[idx]    += slen;
+		b->tin_backlog      += slen;
+		sch->qstats.backlog += slen;
+		q->avg_window_bytes += slen;
 
 		qdisc_tree_decrease_qlen(sch, 1);
 		consume_skb(skb);
@@ -714,7 +714,7 @@ static struct sk_buff *cake_dequeue(struct Qdisc *sch)
 	struct cake_tin_data *b = &q->tins[q->cur_tin];
 	struct cake_flow *flow;
 	struct list_head *head;
-	u32 prev_drop_count, prev_ecn_mark;
+	u16 prev_drop_count, prev_ecn_mark;
 	u32 len;
 	u64 now = ktime_get_ns();
 	s32 i;
@@ -783,8 +783,9 @@ retry:
 
 	b->tin_dropped  += flow->cvars.drop_count - prev_drop_count;
 	b->tin_ecn_mark += flow->cvars.ecn_mark   - prev_ecn_mark;
+	flow->cvars.ecn_mark = 0;
 	flow->dropped        += flow->cvars.drop_count - prev_drop_count;
-	flow->dropped        += flow->cvars.ecn_mark   - prev_ecn_mark;
+	//flow->dropped        += flow->cvars.ecn_mark   - prev_ecn_mark;
 
 	if (!skb) {
 		/* codel dropped the last packet in this queue; try again */
