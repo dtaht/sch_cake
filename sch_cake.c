@@ -563,9 +563,8 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 	 * or if we need to know individual packet sizes for framing overhead.
 	 */
 
-	if (unlikely(skb_is_gso(skb) &&
-		(len * max_t(u32, b->bulk_flow_count, 1U) >
-		      q->peel_threshold))) {
+	if (unlikely((len * max_t(u32, b->bulk_flow_count, 1U) >
+		      q->peel_threshold && skb_is_gso(skb)))) {
 		struct sk_buff *segs, *nskb;
 		netdev_features_t features = netif_skb_features(skb);
 
