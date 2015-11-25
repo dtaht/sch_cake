@@ -179,7 +179,6 @@ struct cake_sched_data {
 	u8		flow_mode;
 
 	/* time_next = time_this + ((len * rate_ns) >> rate_shft) */
-	u16		peel_threshold;
 	u16		rate_shft;
 	u64		time_next_packet;
 	u32		rate_ns;
@@ -563,8 +562,7 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 	 * or if we need to know individual packet sizes for framing overhead.
 	 */
 
-	if (unlikely((len * max_t(u32, b->bulk_flow_count, 1U) >
-		      q->peel_threshold && skb_is_gso(skb)))) {
+	if (unlikely(skb_is_gso(skb))) {
 		struct sk_buff *segs, *nskb;
 		netdev_features_t features = netif_skb_features(skb);
 		u32 slen = 0;
@@ -1166,11 +1164,8 @@ static void cake_reconfigure(struct Qdisc *sch)
 		do_div(t, USEC_PER_SEC / 4);
 		q->buffer_limit = max_t(u32, t, 65536U);
 
-		q->peel_threshold = (q->rate_flags & CAKE_FLAG_ATM) ?
-			0 : min(65535U, q->rate_bps >> 12);
 	} else {
 		q->buffer_limit = ~0;
-		q->peel_threshold = 0;
 	}
 
 	if (q->rate_bps)
