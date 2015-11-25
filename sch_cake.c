@@ -1173,6 +1173,11 @@ static void cake_reconfigure(struct Qdisc *sch)
 		q->peel_threshold = 0;
 	}
 
+	if (q->rate_bps)
+		sch->flags &= ~TCQ_F_CAN_BYPASS;
+	else
+		sch->flags |= TCQ_F_CAN_BYPASS;
+
 	q->buffer_limit = min(q->buffer_limit,
 		max(sch->limit * psched_mtu(qdisc_dev(sch)),
 		    q->buffer_config_limit));
@@ -1344,12 +1349,6 @@ static int cake_init(struct Qdisc *sch, struct nlattr *opt)
 
 	cake_reconfigure(sch);
 	q->avg_peak_bandwidth = q->rate_bps;
-
-	if (q->rate_bps)
-		sch->flags &= ~TCQ_F_CAN_BYPASS;
-	else
-		sch->flags |= TCQ_F_CAN_BYPASS;
-
 	return 0;
 
 nomem:
