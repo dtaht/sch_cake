@@ -612,6 +612,7 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 	}
 
 	/* incoming bandwidth capacity estimate */
+	if (q->rate_flags & CAKE_FLAG_AUTORATE_INGRESS)
 	{
 		u64 packet_interval = now - q->last_packet_time;
 
@@ -785,7 +786,6 @@ retry:
 	b->tin_ecn_mark += flow->cvars.ecn_mark   - prev_ecn_mark;
 	flow->cvars.ecn_mark = 0;
 	flow->dropped        += flow->cvars.drop_count - prev_drop_count;
-	//flow->dropped        += flow->cvars.ecn_mark   - prev_ecn_mark;
 
 	if (!skb) {
 		/* codel dropped the last packet in this queue; try again */
