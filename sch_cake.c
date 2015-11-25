@@ -656,17 +656,14 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 		q->buffer_max_used = q->buffer_used;
 
 	if (q->buffer_used > q->buffer_limit) {
-		bool same_flow = false;
 		u32  dropped = 0;
 
 		while (q->buffer_used > q->buffer_limit) {
 			dropped++;
-			if (cake_drop(sch) == idx + (tin << 16))
-				same_flow = true;
+			cake_drop(sch);
 		}
 		b->drop_overlimit += dropped;
-		qdisc_tree_decrease_qlen(sch, dropped - same_flow);
-		return same_flow ? NET_XMIT_CN : NET_XMIT_SUCCESS;
+		qdisc_tree_decrease_qlen(sch, dropped);
 	}
 	return NET_XMIT_SUCCESS;
 }
