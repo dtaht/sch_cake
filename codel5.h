@@ -254,17 +254,16 @@ static inline struct sk_buff *custom_dequeue(struct codel_vars *vars,
 static struct sk_buff *codel_dequeue(struct Qdisc *sch,
 				     struct codel_vars *vars,
 				     struct codel_params *p,
+				     codel_time_t now,
 				     bool overloaded)
 {
 	struct sk_buff *skb = custom_dequeue(vars, sch);
-	codel_time_t now;
 	bool drop;
 
 	if (!skb) {
 		vars->dropping = false;
 		return skb;
 	}
-	now = codel_get_time();
 	drop = codel_should_drop(skb, sch, vars, p, now);
 	if (vars->dropping) {
 		if (!drop) {
