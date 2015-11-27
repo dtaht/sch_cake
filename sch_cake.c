@@ -884,8 +884,10 @@ static void cake_set_rate(struct cake_tin_data *b, u64 rate, u32 mtu,
 				     b->cparams.target * 8);
 	b->cparams.threshold = (b->cparams.target >> 15) *
 		(b->cparams.interval >> 15) * 2;
-
-	b->quantum = max(min(rate >> 12, 1514ULL), 300ULL);
+	if(rate != 0) 
+		b->quantum = max(min(rate >> 12, 1514ULL), 300ULL);
+	else
+		b->quantum = 1514;
 }
 
 static void cake_config_besteffort(struct Qdisc *sch)
