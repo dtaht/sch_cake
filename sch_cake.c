@@ -862,7 +862,9 @@ static void cake_set_rate(struct cake_tin_data *b, u64 rate, u32 mtu,
 	codel_time_t byte_target_ns;
 	u32 byte_target = mtu + (mtu >> 1);
 
+	b->quantum = 1514;
 	if (rate) {
+		b->quantum = max(min(rate >> 12, 1514ULL), 300ULL);
 		rate_shft = 32;
 		rate_ns = ((u64) NSEC_PER_SEC) << rate_shft;
 		do_div(rate_ns, max(MIN_RATE, rate));
@@ -884,10 +886,6 @@ static void cake_set_rate(struct cake_tin_data *b, u64 rate, u32 mtu,
 				     b->cparams.target * 8);
 	b->cparams.threshold = (b->cparams.target >> 15) *
 		(b->cparams.interval >> 15) * 2;
-	if(rate != 0) 
-		b->quantum = max(min(rate >> 12, 1514ULL), 300ULL);
-	else
-		b->quantum = 1514;
 }
 
 static void cake_config_besteffort(struct Qdisc *sch)
