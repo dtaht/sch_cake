@@ -128,15 +128,15 @@ struct codel_params {
 
 struct codel_vars {
 	u32		count;
-	u16		dropping;
-	u16		rec_inv_sqrt;
+	u32		rec_inv_sqrt;
 	codel_time_t	first_above_time;
 	codel_time_t	drop_next;
 	u16		drop_count;
 	u16		ecn_mark;
+	bool	dropping;
 };
 /* sizeof_in_bits(rec_inv_sqrt) */
-#define REC_INV_SQRT_BITS (8 * sizeof(u16))
+#define REC_INV_SQRT_BITS (8 * sizeof(u32))
 /* needed shift to get a Q0.32 number from rec_inv_sqrt */
 #define REC_INV_SQRT_SHIFT (32 - REC_INV_SQRT_BITS)
 #define REC_INV_SQRT_CACHE (16)
@@ -161,7 +161,7 @@ static void codel_vars_init(struct codel_vars *vars)
 static void codel_Newton_step(struct codel_vars *vars)
 {
 	if (vars->count < REC_INV_SQRT_CACHE &&
-	   codel_rec_inv_sqrt_cache[vars->count]) {
+	   likely(codel_rec_inv_sqrt_cache[vars->count])) {
 		vars->rec_inv_sqrt = codel_rec_inv_sqrt_cache[vars->count];
 	} else {
 		u32 invsqrt = ((u32)vars->rec_inv_sqrt) << REC_INV_SQRT_SHIFT;
