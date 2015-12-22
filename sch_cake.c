@@ -329,41 +329,35 @@ cake_hash(struct cake_tin_data *q, const struct sk_buff *skb, int flow_mode)
 	} else {
 		u32 inner_hash = reduced_hash % CAKE_SET_WAYS;
 		u32 outer_hash = reduced_hash - inner_hash;
-		u32 i, j, k;
+		u32 i, k;
 
 		/* check if any active queue in the set is reserved for
-		 * this flow. count the empty queues in the set, too
+		 * this flow.
 		 */
-
-		for (i = j = 0, k = inner_hash; i < CAKE_SET_WAYS;
+		for (i = 0, k = inner_hash; i < CAKE_SET_WAYS;
 		     i++, k = (k + 1) % CAKE_SET_WAYS) {
 			if (q->tags[outer_hash + k] == flow_hash) {
 				q->way_hits++;
 				goto found;
-			} else if (list_empty(&q->flows[outer_hash + k].
-					      flowchain)) {
-				j++;
 			}
 		}
 
-		/* no queue is reserved for this flow */
-		if (j) {
-			/* there's at least one empty queue, so find one
-			 * to reserve.
-			 */
-			q->way_misses++;
-
-			for (i = 0; i < CAKE_SET_WAYS; i++, k = (k + 1)
-				     % CAKE_SET_WAYS)
-				if (list_empty(&q->flows[outer_hash + k].
-					       flowchain))
-					goto found;
-		} else {
-			/* With no empty queues default to the original
-			 * queue and accept the collision.
-			 */
-			q->way_collisions++;
+		/* no queue is reserved for this flow, look for an
+		 * empty one.
+		 */
+		for (i = 0; i < CAKE_SET_WAYS;
+			 i++, k = (k + 1) % CAKE_SET_WAYS) {
+			if (list_empty(&q->flows[outer_hash + k].
+					   flowchain)) {
+				q->way_misses++;
+				goto found;
+			}
 		}
+
+		/* With no empty queues default to the original
+		 * queue and accept the collision.
+		 */
+		q->way_collisions++;
 
 found:
 		/* reserve queue for future packets in same flow */
