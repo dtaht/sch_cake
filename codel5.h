@@ -211,7 +211,8 @@ static bool codel_should_drop(const struct sk_buff *skb,
 			      struct Qdisc *sch,
 			      struct codel_vars *vars,
 			      const struct codel_params *p,
-			      codel_time_t now)
+			      codel_time_t now,
+			      bool overloaded)
 {
 	if (!skb) {
 		vars->first_above_time = 0;
@@ -232,14 +233,15 @@ static bool codel_should_drop(const struct sk_buff *skb,
 	if (vars->first_above_time == 0) {
 		/* just went above from below; mark the time */
 		vars->first_above_time = now;
-
+	} else if (overloaded) {
+		/* this flag is set if the pending queue cannot be cleared within interval */
+		return true;
 	} else if (vars->count > 1 && now - vars->drop_next < 8 * p->interval) {
 		/* we were recently dropping; be more aggressive */
 		return now > codel_control_law(vars->first_above_time,
 						p->interval,
 						vars->rec_inv_sqrt);
-	} else if (((now - vars->first_above_time) >> 15) *
-		   ((now - codel_get_enqueue_time(skb)) >> 15) > p->threshold) {
+	} else if (now - vars->first_above_time > p->interval) {
 		return true;
 	}
 
@@ -264,7 +266,7 @@ static struct sk_buff *codel_dequeue(struct Qdisc *sch,
 		vars->dropping = false;
 		return skb;
 	}
-	drop = codel_should_drop(skb, sch, vars, p, now);
+	drop = codel_should_drop(skb, sch, vars, p, now, overloaded);
 	if (vars->dropping) {
 		if (!drop) {
 			/* sojourn time below target - leave dropping state */
@@ -289,7 +291,7 @@ static struct sk_buff *codel_dequeue(struct Qdisc *sch,
 							    p->interval,
 							    vars->rec_inv_sqrt);
 			do {
-				if (INET_ECN_set_ce(skb) && !overloaded) {
+				if (INET_ECN_set_ce(skb)) {
 					vars->ecn_mark++;
 					/* and schedule the next drop */
 					vars->drop_next = codel_control_law(
@@ -301,7 +303,7 @@ static struct sk_buff *codel_dequeue(struct Qdisc *sch,
 				vars->drop_count++;
 				skb = custom_dequeue(vars, sch);
 				if (skb && !codel_should_drop(skb, sch, vars,
-							      p, now)) {
+							      p, now, overloaded)) {
 					/* leave dropping state */
 					vars->dropping = false;
 				} else {
@@ -318,14 +320,14 @@ static struct sk_buff *codel_dequeue(struct Qdisc *sch,
 				vars->ecn_mark++;
 		}
 	} else if (drop) {
-		if (INET_ECN_set_ce(skb) && !overloaded) {
+		if (INET_ECN_set_ce(skb)) {
 			vars->ecn_mark++;
 		} else {
 			qdisc_drop(skb, sch);
 			vars->drop_count++;
 
 			skb = custom_dequeue(vars, sch);
-			drop = codel_should_drop(skb, sch, vars, p, now);
+			drop = codel_should_drop(skb, sch, vars, p, now, overloaded);
 			if (skb && INET_ECN_set_ce(skb))
 				vars->ecn_mark++;
 		}

@@ -865,8 +865,8 @@ retry:
 	prev_ecn_mark   = flow->cvars.ecn_mark;
 
 	skb = codel_dequeue(sch, &flow->cvars, &b->cparams, now,
-			    q->buffer_used >
-			    (q->buffer_limit >> 2) + (q->buffer_limit >> 1));
+		(b->backlogs[b->cur_flow] * (u64)q->rate_ns) >> q->rate_shft
+			> b->cparams.interval);
 
 	b->tin_dropped  += flow->cvars.drop_count - prev_drop_count;
 	b->tin_ecn_mark += flow->cvars.ecn_mark   - prev_ecn_mark;
