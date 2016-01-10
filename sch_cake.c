@@ -144,7 +144,8 @@ struct cake_tin_data {
 				 * CAKE_SET_WAYS
 				 */
 	u32	perturbation;/* hash perturbation */
-	u16	quantum;
+	u16	flow_quantum;
+	u16	host_quantum;
 
 	struct codel_params cparams;
 	u32	drop_overlimit;
@@ -711,7 +712,7 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 	if (list_empty(&flow->flowchain)) {
 		list_add_tail(&flow->flowchain, &b->new_flows);
 		b->sparse_flow_count++;
-		flow->deficit = b->quantum;
+		flow->deficit = b->flow_quantum;
 		flow->dropped = 0;
 	}
 
@@ -844,9 +845,9 @@ retry:
 			u32 j;
 			for(j=0; j < b->flows_cnt; j++) {
 				if(b->hosts[j].srchost_deficit < 0)
-					b->hosts[j].srchost_deficit += b->quantum;
+					b->hosts[j].srchost_deficit += b->host_quantum;
 				if(b->hosts[j].dsthost_deficit < 0)
-					b->hosts[j].dsthost_deficit += b->quantum;
+					b->hosts[j].dsthost_deficit += b->host_quantum;
 			}
 			deferred_hosts = 0;
 		}
@@ -855,7 +856,7 @@ retry:
 
 	/* flow isolation (DRR++) */
 	if (flow->deficit <= 0) {
-		flow->deficit += b->quantum;
+		flow->deficit += b->flow_quantum;
 		list_move_tail(&flow->flowchain, &b->old_flows);
 		if (head == &b->new_flows) {
 			b->sparse_flow_count--;
@@ -959,9 +960,10 @@ static void cake_set_rate(struct cake_tin_data *b, u64 rate, u32 mtu,
 	codel_time_t byte_target_ns;
 	u32 byte_target = mtu + (mtu >> 1);
 
-	b->quantum = 1514;
+	b->flow_quantum = 1514;
+	b->host_quantum = 4096;
 	if (rate) {
-		b->quantum = max(min(rate >> 12, 1514ULL), 300ULL);
+		b->flow_quantum = max(min(rate >> 12, 1514ULL), 300ULL);
 		rate_shft = 32;
 		rate_ns = ((u64) NSEC_PER_SEC) << rate_shft;
 		do_div(rate_ns, max(MIN_RATE, rate));
