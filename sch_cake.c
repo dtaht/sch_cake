@@ -777,11 +777,13 @@ static struct sk_buff *cake_dequeue(struct Qdisc *sch)
 	struct cake_tin_data *b = &q->tins[q->cur_tin];
 	struct cake_flow *flow;
 	struct list_head *head;
-	u16 prev_drop_count, prev_ecn_mark, deferred_hosts;
+	u16 prev_drop_count, prev_ecn_mark;
+	u16 deferred_hosts, deferred_dst, deferred_src;
 	u32 len;
 	codel_time_t now = ktime_get_ns();
 	s32 i;
 	codel_time_t delay;
+	bool src_blocked = false, dst_blocked = false;
 
 begin:
 	if (!sch->q.qlen)
@@ -812,7 +814,7 @@ begin:
 		}
 	}
 
-	deferred_hosts = 0;
+	deferred_hosts = deferred_src = deferred_dst = 0;
 
 retry:
 	/* service this class */
@@ -831,25 +833,34 @@ retry:
 	q->cur_flow = flow - b->flows;
 
 	/* triple isolation (modified dual DRR) */
-	if (((q->flow_mode & CAKE_FLOW_DUAL_SRC) == CAKE_FLOW_DUAL_SRC &&
-			b->hosts[flow->srchost].srchost_deficit < 0) ||
-		((q->flow_mode & CAKE_FLOW_DUAL_DST) == CAKE_FLOW_DUAL_DST &&
-			b->hosts[flow->dsthost].dsthost_deficit < 0)) {
+	src_blocked = (q->flow_mode & CAKE_FLOW_DUAL_SRC) == CAKE_FLOW_DUAL_SRC &&
+			b->hosts[flow->srchost].srchost_deficit < 0;
 
+	dst_blocked = (q->flow_mode & CAKE_FLOW_DUAL_DST) == CAKE_FLOW_DUAL_DST &&
+			b->hosts[flow->dsthost].dsthost_deficit < 0;
+
+	if (src_blocked || dst_blocked) {
 		/* this host is exhausted, so defer the flow */
 		list_move_tail(&flow->flowchain, head);
 		deferred_hosts++;
 
+		if(src_blocked && !dst_blocked)
+			deferred_src++;
+
+		if(dst_blocked && !src_blocked)
+			deferred_dst++;
+
 		if(deferred_hosts >= b->sparse_flow_count + b->bulk_flow_count) {
 			/* looks like all hosts are exhausted; refresh them */
 			u32 j;
+
 			for(j=0; j < b->flows_cnt; j++) {
-				if(b->hosts[j].srchost_deficit < 0)
+				if(deferred_src >= deferred_dst && b->hosts[j].srchost_deficit < 0)
 					b->hosts[j].srchost_deficit += b->host_quantum;
-				if(b->hosts[j].dsthost_deficit < 0)
+				if(deferred_dst >= deferred_src && b->hosts[j].dsthost_deficit < 0)
 					b->hosts[j].dsthost_deficit += b->host_quantum;
 			}
-			deferred_hosts = 0;
+			deferred_hosts = deferred_src = deferred_dst = 0;
 		}
 		goto retry;
 	}
