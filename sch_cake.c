@@ -781,7 +781,7 @@ static struct sk_buff *cake_dequeue(struct Qdisc *sch)
 	struct cake_flow *flow;
 	struct list_head *head;
 	u16 prev_drop_count, prev_ecn_mark;
-	u16 deferred_hosts, deferred_dst, deferred_src;
+	u16 deferred_hosts;
 	u32 len;
 	codel_time_t now = ktime_get_ns();
 	s32 i;
@@ -817,7 +817,7 @@ begin:
 		}
 	}
 
-	deferred_hosts = deferred_src = deferred_dst = 0;
+	deferred_hosts = 0;
 
 retry:
 	/* service this class */
@@ -847,23 +847,17 @@ retry:
 		list_move_tail(&flow->flowchain, head);
 		deferred_hosts++;
 
-		if(src_blocked)
-			deferred_src++;
-
-		if(dst_blocked)
-			deferred_dst++;
-
 		if(deferred_hosts >= b->sparse_flow_count + b->bulk_flow_count) {
 			/* looks like all hosts are exhausted; refresh them */
 			u32 j;
 
 			for(j=0; j < b->flows_cnt; j++) {
-				if(deferred_src >= deferred_dst && b->hosts[j].srchost_deficit < 0)
+				if(b->hosts[j].srchost_deficit < 0)
 					b->hosts[j].srchost_deficit += b->host_quantum;
-				if(deferred_dst >= deferred_src && b->hosts[j].dsthost_deficit < 0)
+				if(b->hosts[j].dsthost_deficit < 0)
 					b->hosts[j].dsthost_deficit += b->host_quantum;
 			}
-			deferred_hosts = deferred_src = deferred_dst = 0;
+			deferred_hosts = 0;
 		}
 		goto retry;
 	}
@@ -876,7 +870,7 @@ retry:
 			b->sparse_flow_count--;
 			b->bulk_flow_count++;
 		}
-		deferred_hosts = deferred_src = deferred_dst = 0;
+		deferred_hosts = 0;
 		goto retry;
 	}
 
