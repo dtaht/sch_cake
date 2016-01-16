@@ -302,9 +302,6 @@ cake_hash(struct cake_tin_data *q, const struct sk_buff *skb, int flow_mode)
 	host_keys.tags.vlan_id    = 0;
 	host_keys.tags.flow_label = 0;
 
-	if (flow_mode & CAKE_FLOW_FLOWS)
-		flow_hash = flow_hash_from_keys(&keys);
-
 	switch (host_keys.control.addr_type) {
 	case FLOW_DISSECTOR_KEY_IPV4_ADDRS:
 		host_keys.addrs.v4addrs.src = 0;
@@ -327,6 +324,12 @@ cake_hash(struct cake_tin_data *q, const struct sk_buff *skb, int flow_mode)
 	default:
 		dsthost_hash = srchost_hash = 0;
 	};
+
+	/* This *must* be after the above switch, since as a
+	 * side-effect it sorts the src and dst addresses.
+	 */
+	if (flow_mode & CAKE_FLOW_FLOWS)
+		flow_hash = flow_hash_from_keys(&keys);
 #endif
 
 	if (!(flow_mode & CAKE_FLOW_FLOWS)) {
@@ -844,10 +847,10 @@ retry:
 		list_move_tail(&flow->flowchain, head);
 		deferred_hosts++;
 
-		if(src_blocked && !dst_blocked)
+		if(src_blocked)
 			deferred_src++;
 
-		if(dst_blocked && !src_blocked)
+		if(dst_blocked)
 			deferred_dst++;
 
 		if(deferred_hosts >= b->sparse_flow_count + b->bulk_flow_count) {
@@ -873,6 +876,7 @@ retry:
 			b->sparse_flow_count--;
 			b->bulk_flow_count++;
 		}
+		deferred_hosts = deferred_src = deferred_dst = 0;
 		goto retry;
 	}
 
