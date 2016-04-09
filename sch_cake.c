@@ -229,6 +229,7 @@ enum {
 	CAKE_MODE_PRECEDENCE,
 	CAKE_MODE_DIFFSERV8,
 	CAKE_MODE_DIFFSERV4,
+	CAKE_MODE_LLT,
 	CAKE_MODE_MAX
 };
 
@@ -1054,9 +1055,10 @@ static void cake_config_precedence(struct Qdisc *sch)
  *
  *	Least Effort (CS1)
  *	Best Effort (CS0)
- *	Max Reliability (TOS1)
+ *	Max Reliability & LLT "Lo" (TOS1)
  *	Max Throughput (TOS2)
  *	Min Delay (TOS4)
+ *  LLT "La" (TOS5)
  *	Assured Forwarding 1 (AF1x) - x3
  *	Assured Forwarding 2 (AF2x) - x3
  *	Assured Forwarding 3 (AF3x) - x3
@@ -1231,6 +1233,63 @@ static void cake_config_diffserv4(struct Qdisc *sch)
 	q->tins[3].tin_quantum_band = (quantum >> 2);
 }
 
+static void cake_config_diffserv_llt(struct Qdisc *sch)
+{
+/*  Diffserv structure specialised for Latency-Loss-Tradeoff spec.
+ *		Loss Sensitive		(TOS1, TOS2)
+ *		Best Effort
+ *		Latency Sensitive	(TOS4, TOS5, VA, EF)
+ *		Low Priority		(CS1)
+ *		Network Control		(CS6, CS7)
+ */
+	struct cake_sched_data *q = qdisc_priv(sch);
+	u64 rate = q->rate_bps;
+	u32 mtu = psched_mtu(qdisc_dev(sch));
+	u32 i;
+
+	q->tin_cnt = 5;
+
+	/* codepoint to class mapping */
+	for (i = 0; i < 64; i++)
+		q->tin_index[i] = 1;	/* default to best-effort */
+
+	q->tin_index[0x01] = 0;	/* TOS1 */
+	q->tin_index[0x02] = 0;	/* TOS2 */
+	q->tin_index[0x04] = 2;	/* TOS4 */
+	q->tin_index[0x05] = 2;	/* TOS5 */
+	q->tin_index[0x2c] = 2;	/* VA */
+	q->tin_index[0x2e] = 2;	/* EF */
+	q->tin_index[0x08] = 3;	/* CS1 */
+	q->tin_index[0x30] = 4;	/* CS6 */
+	q->tin_index[0x38] = 4;	/* CS7 */
+
+	/* class characteristics */
+	cake_set_rate(&q->tins[0], rate, mtu,
+		      US2TIME(q->target * 4), US2TIME(q->interval * 4));
+	cake_set_rate(&q->tins[1], rate, mtu,
+		      US2TIME(q->target), US2TIME(q->interval));
+	cake_set_rate(&q->tins[2], rate, mtu,
+		      US2TIME(q->target), US2TIME(q->target));
+	cake_set_rate(&q->tins[3], rate >> 4, mtu,
+		      US2TIME(q->target), US2TIME(q->interval));
+	cake_set_rate(&q->tins[3], rate >> 4, mtu,
+		      US2TIME(q->target * 4), US2TIME(q->interval * 4));
+
+	/* priority weights */
+	q->tins[0].tin_quantum_prio = 256;
+	q->tins[1].tin_quantum_prio = 256;
+	q->tins[2].tin_quantum_prio = 256;
+	q->tins[3].tin_quantum_prio = 2048;
+	q->tins[4].tin_quantum_prio = 4096;
+
+	/* bandwidth-sharing weights */
+	q->tins[0].tin_quantum_band = 256;
+	q->tins[1].tin_quantum_band = 256;
+	q->tins[2].tin_quantum_band = 256;
+	q->tins[3].tin_quantum_band = 16;
+	q->tins[4].tin_quantum_band = 1;
+}
+
 static void cake_reconfigure(struct Qdisc *sch)
 {
 	struct cake_sched_data *q = qdisc_priv(sch);
@@ -1252,6 +1311,10 @@ static void cake_reconfigure(struct Qdisc *sch)
 
 	case CAKE_MODE_DIFFSERV4:
 		cake_config_diffserv4(sch);
+		break;
+
+	case CAKE_MODE_LLT:
+		cake_config_diffserv_llt(sch);
 		break;
 	};
 
