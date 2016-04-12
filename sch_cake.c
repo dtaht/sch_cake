@@ -885,7 +885,7 @@ retry:
 
 	prev_drop_count = flow->cvars.drop_count;
 	prev_ecn_mark   = flow->cvars.ecn_mark;
-	prev_backog     = b->backlogs[q->cur_flow];
+	prev_backlog     = b->backlogs[q->cur_flow];
 
 	skb = codel_dequeue(sch, &flow->cvars, &b->cparams, now,
 		(b->backlogs[q->cur_flow] * (u64)q->rate_ns) >> q->rate_shft
@@ -921,7 +921,7 @@ retry:
 		qdisc_tree_decrease_qlen(sch, flow->cvars.drop_count);
 #else
 		qdisc_tree_reduce_backlog(sch, flow->cvars.drop_count,
-				b->backlogs[q->cur_flow] - qdisc_pkt_len(skb));
+				(prev_backlog - b->backlogs[q->cur_flow]) - qdisc_pkt_len(skb));
 #endif
 		flow->cvars.drop_count = 0;
 	}
