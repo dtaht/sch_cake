@@ -620,8 +620,8 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 	}
 
 	b->last_skblen = len;
-	if (unlikely(b->last_skblen > b->max_skblen))
-		b->max_skblen = b->last_skblen;
+	if (unlikely(len > b->max_skblen))
+		b->max_skblen = len;
 
 	/* Split GSO aggregates if they're likely to impair flow isolation
 	 * or if we need to know individual packet sizes for framing overhead.
@@ -646,7 +646,7 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 			sch->q.qlen++;
 			b->packets++;
 			slen += segs->len;
-			q->buffer_used      += segs->truesize;
+			q->buffer_used += segs->truesize;
 			segs = nskb;
 		}
 
@@ -656,7 +656,11 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 		sch->qstats.backlog += slen;
 		q->avg_window_bytes += slen;
 
+#if 0
 		qdisc_tree_decrease_qlen(sch, 1);
+#else
+		qdisc_tree_reduce_backlog(sch, 1, len);
+#endif
 		consume_skb(skb);
 	} else {
 		/* not splitting */
@@ -733,7 +737,11 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 				same_flow = true;
 		}
 		b->drop_overlimit += dropped;
+#if 0
 		qdisc_tree_decrease_qlen(sch, dropped - same_flow);
+#else
+		qdisc_tree_reduce_backlog(sch, dropped - same_flow, 0 /* FIXME */);
+#endif
 		return same_flow ? NET_XMIT_CN : NET_XMIT_SUCCESS;
 	}
 	return NET_XMIT_SUCCESS;
@@ -781,7 +789,7 @@ static struct sk_buff *cake_dequeue(struct Qdisc *sch)
 	struct cake_tin_data *b = &q->tins[q->cur_tin];
 	struct cake_flow *flow;
 	struct list_head *head;
-	u16 prev_drop_count, prev_ecn_mark;
+	u16 prev_drop_count, prev_ecn_mark, prev_backlog;
 	u16 deferred_hosts;
 	u32 len;
 	codel_time_t now = ktime_get_ns();
@@ -877,6 +885,7 @@ retry:
 
 	prev_drop_count = flow->cvars.drop_count;
 	prev_ecn_mark   = flow->cvars.ecn_mark;
+	prev_backog     = b->backlogs[q->cur_flow];
 
 	skb = codel_dequeue(sch, &flow->cvars, &b->cparams, now,
 		(b->backlogs[q->cur_flow] * (u64)q->rate_ns) >> q->rate_shft
@@ -908,7 +917,12 @@ retry:
 
 	qdisc_bstats_update(sch, skb);
 	if (flow->cvars.drop_count && sch->q.qlen) {
+#if 0
 		qdisc_tree_decrease_qlen(sch, flow->cvars.drop_count);
+#else
+		qdisc_tree_reduce_backlog(sch, flow->cvars.drop_count,
+				b->backlogs[q->cur_flow] - qdisc_pkt_len(skb));
+#endif
 		flow->cvars.drop_count = 0;
 	}
 
