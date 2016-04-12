@@ -1286,7 +1286,7 @@ static void cake_config_diffserv_llt(struct Qdisc *sch)
 		      US2TIME(q->target), US2TIME(q->target));
 	cake_set_rate(&q->tins[3], rate >> 4, mtu,
 		      US2TIME(q->target), US2TIME(q->interval));
-	cake_set_rate(&q->tins[3], rate >> 4, mtu,
+	cake_set_rate(&q->tins[4], rate >> 4, mtu,
 		      US2TIME(q->target * 4), US2TIME(q->interval * 4));
 
 	/* priority weights */
