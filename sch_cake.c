@@ -58,6 +58,10 @@
 #endif
 #include "codel5.h"
 
+#if KERNEL_VERSION(4, 6, 0) > LINUX_VERSION_CODE
+#define qdisc_tree_reduce_backlog(_a,_b,_c) qdisc_tree_decrease_qlen(_a,_b)
+#endif
+
 /* The CAKE Principles:
  *				 (or, how to have your cake and eat it too)
  *
@@ -656,11 +660,7 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 		sch->qstats.backlog += slen;
 		q->avg_window_bytes += slen;
 
-#if 0
-		qdisc_tree_decrease_qlen(sch, 1);
-#else
 		qdisc_tree_reduce_backlog(sch, 1, len);
-#endif
 		consume_skb(skb);
 	} else {
 		/* not splitting */
@@ -737,11 +737,7 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 				same_flow = true;
 		}
 		b->drop_overlimit += dropped;
-#if 0
-		qdisc_tree_decrease_qlen(sch, dropped - same_flow);
-#else
 		qdisc_tree_reduce_backlog(sch, dropped - same_flow, 0 /* FIXME */);
-#endif
 		return same_flow ? NET_XMIT_CN : NET_XMIT_SUCCESS;
 	}
 	return NET_XMIT_SUCCESS;
@@ -810,13 +806,14 @@ begin:
 	}
 
 	/* Choose a class to work on. */
-	while (!b->tin_backlog || b->tin_deficit <= 0) {
+	while (b->tin_deficit < 0 || !(b->sparse_flow_count + b->bulk_flow_count)) {
 		/* this is the priority soft-shaper magic */
-		if (b->tin_deficit <= 0)
+		if (b->tin_deficit <= 0) {
 			b->tin_deficit +=
 				b->tin_time_next_packet > now ?
 					b->tin_quantum_band :
 					b->tin_quantum_prio;
+		}
 
 		q->cur_tin++;
 		b++;
@@ -834,12 +831,8 @@ retry:
 	if (list_empty(head) || deferred_hosts >= b->sparse_flow_count) {
 		head = &b->old_flows;
 
-		if (unlikely(list_empty(head))) {
-			/* shouldn't ever happen */
-			WARN_ON(b->tin_backlog);
-			b->tin_backlog = 0;
+		if (unlikely(list_empty(head)))
 			goto begin;
-		}
 	}
 	flow = list_first_entry(head, struct cake_flow, flowchain);
 	q->cur_flow = flow - b->flows;
@@ -917,12 +910,8 @@ retry:
 
 	qdisc_bstats_update(sch, skb);
 	if (flow->cvars.drop_count && sch->q.qlen) {
-#if 0
-		qdisc_tree_decrease_qlen(sch, flow->cvars.drop_count);
-#else
 		qdisc_tree_reduce_backlog(sch, flow->cvars.drop_count,
 				(prev_backlog - b->backlogs[q->cur_flow]) - qdisc_pkt_len(skb));
-#endif
 		flow->cvars.drop_count = 0;
 	}
 
@@ -1006,7 +995,7 @@ static void cake_set_rate(struct cake_tin_data *b, u64 rate, u32 mtu,
 	b->cparams.target = max(byte_target_ns, ns_target);
 	b->cparams.interval = max(rtt_est_ns +
 				     b->cparams.target - ns_target,
-				     b->cparams.target * 8);
+				     b->cparams.target * 2);
 	b->cparams.threshold = (b->cparams.target >> 15) *
 		(b->cparams.interval >> 15) * 2;
 }
@@ -1195,7 +1184,7 @@ static void cake_config_diffserv4(struct Qdisc *sch)
 	struct cake_sched_data *q = qdisc_priv(sch);
 	u64 rate = q->rate_bps;
 	u32 mtu = psched_mtu(qdisc_dev(sch));
-	u32 quantum = 256;
+	u32 quantum = 1024;
 	u32 i;
 
 	q->tin_cnt = 4;
@@ -1290,18 +1279,18 @@ static void cake_config_diffserv_llt(struct Qdisc *sch)
 		      US2TIME(q->target * 4), US2TIME(q->interval * 4));
 
 	/* priority weights */
-	q->tins[0].tin_quantum_prio = 256;
-	q->tins[1].tin_quantum_prio = 256;
-	q->tins[2].tin_quantum_prio = 256;
-	q->tins[3].tin_quantum_prio = 2048;
-	q->tins[4].tin_quantum_prio = 4096;
+	q->tins[0].tin_quantum_prio = 2048;
+	q->tins[1].tin_quantum_prio = 2048;
+	q->tins[2].tin_quantum_prio = 2048;
+	q->tins[3].tin_quantum_prio = 16384;
+	q->tins[4].tin_quantum_prio = 32768;
 
 	/* bandwidth-sharing weights */
-	q->tins[0].tin_quantum_band = 256;
-	q->tins[1].tin_quantum_band = 256;
-	q->tins[2].tin_quantum_band = 256;
-	q->tins[3].tin_quantum_band = 16;
-	q->tins[4].tin_quantum_band = 1;
+	q->tins[0].tin_quantum_band = 2048;
+	q->tins[1].tin_quantum_band = 2048;
+	q->tins[2].tin_quantum_band = 2048;
+	q->tins[3].tin_quantum_band = 256;
+	q->tins[4].tin_quantum_band = 16;
 }
 
 static void cake_reconfigure(struct Qdisc *sch)
