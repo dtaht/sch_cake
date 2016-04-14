@@ -930,11 +930,10 @@ retry:
 	b->base_delay = cake_ewma(b->base_delay, delay,
 				     delay < b->base_delay ? 2 : 8);
 
-	/* charge packet bandwidth to this and all lower tins, and
+	/* charge packet bandwidth to this tin, and
 	 * to the global shaper.
 	 */
-	for (i = q->cur_tin; i >= 0; i--, b--)
-		b->tin_time_next_packet +=
+	b->tin_time_next_packet +=
 			(len * (u64)b->tin_rate_ns) >> b->tin_rate_shft;
 	q->time_next_packet += (len * (u64)q->rate_ns) >> q->rate_shft;
 
