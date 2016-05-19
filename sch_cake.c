@@ -789,7 +789,6 @@ static struct sk_buff *cake_dequeue(struct Qdisc *sch)
 	u16 deferred_hosts;
 	u32 len;
 	codel_time_t now = ktime_get_ns();
-	s32 i;
 	codel_time_t delay;
 	bool src_blocked = false, dst_blocked = false;
 
