@@ -347,9 +347,9 @@ cake_hash(struct cake_tin_data *q, const struct sk_buff *skb, int flow_mode)
 			flow_hash ^= dsthost_hash;
 	}
 
-	reduced_hash = reciprocal_scale(flow_hash,    CAKE_QUEUES);
-	srchost_idx  = reciprocal_scale(srchost_hash, CAKE_QUEUES);
-	dsthost_idx  = reciprocal_scale(dsthost_hash, CAKE_QUEUES);
+	reduced_hash = flow_hash    % CAKE_QUEUES;
+	srchost_idx  = srchost_hash % CAKE_QUEUES;
+	dsthost_idx  = dsthost_hash % CAKE_QUEUES;
 
 	/* set-associative hashing */
 	/* fast path if no hash collision (direct lookup succeeds) */
