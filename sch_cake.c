@@ -558,7 +558,7 @@ static inline void cake_heapify_up(struct cake_sched_data *q, u16 i)
 
 		if(q->tins[it].backlogs[ib] > q->tins[pt].backlogs[pb]) {
 			q->overflow_heap[i] = pp;
-			q->overflow_head[p] = ii;
+			q->overflow_heap[p] = ii;
 			q->tins[it].overflow_idx[ib] = p;
 			q->tins[pt].overflow_idx[pb] = i;
 			i = p;
@@ -572,7 +572,7 @@ static unsigned int cake_drop(struct Qdisc *sch)
 {
 	struct cake_sched_data *q = qdisc_priv(sch);
 	struct sk_buff *skb;
-	u32 maxbacklog = 0, idx = 0, tin = 0, i, j, len;
+	u32 idx = 0, tin = 0, i, len;
 	struct cake_tin_data *b;
 	struct cake_flow *flow;
 
@@ -586,31 +586,6 @@ static unsigned int cake_drop(struct Qdisc *sch)
 	/* select longest queue for pruning */
 	tin = q->overflow_heap[0] % CAKE_MAX_TINS;
 	idx = q->overflow_heap[0] / CAKE_MAX_TINS;
-
-	/* Queue is full; check across tins in use and
-	 * find the fat flow and drop a packet.
-	for (j = 0; j < q->tin_cnt; j++) {
-		b = &q->tins[j];
-
-		list_for_each_entry(flow, &b->old_flows, flowchain) {
-			i = flow - b->flows;
-			if (b->backlogs[i] > maxbacklog) {
-				maxbacklog = b->backlogs[i];
-				idx = i;
-				tin = j;
-			}
-		}
-
-		list_for_each_entry(flow, &b->new_flows, flowchain) {
-			i = flow - b->flows;
-			if (b->backlogs[i] > maxbacklog) {
-				maxbacklog = b->backlogs[i];
-				idx = i;
-				tin = j;
-			}
-		}
-	}
-	 */
 
 	b = &q->tins[tin];
 	flow = &b->flows[idx];
@@ -866,7 +841,6 @@ static struct sk_buff *custom_dequeue(struct codel_vars *vars,
 static void cake_clear_tin(struct Qdisc *sch, u16 tin)
 {
 	struct cake_sched_data *q = qdisc_priv(sch);
-	struct cake_tin_data *b = &q->tins[tin];
 
 	q->cur_tin = tin;
 	for (q->cur_flow = 0; q->cur_flow < CAKE_QUEUES; q->cur_flow++)
