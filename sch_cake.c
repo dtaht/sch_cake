@@ -141,14 +141,11 @@ struct cake_host {
 };
 
 struct cake_tin_data {
-	struct cake_flow *flows; /* Flows table [flows_cnt] */
-	u32	*backlogs;	/* backlog table [flows_cnt] */
-	u32 *tags;		/* for set association [flows_cnt] */
+	struct cake_flow *flows; /* Flows table [CAKE_QUEUES] */
+	u32	*backlogs;	/* backlog table [CAKE_QUEUES] */
+	u32 *tags;		/* for set association [CAKE_QUEUES] */
 	u16 *overflow_idx;
-	struct cake_host *hosts; /* for triple isolation [flows_cnt] */
-	u32	 flows_cnt;	/* number of flows - must be multiple of
-				 * CAKE_SET_WAYS
-				 */
+	struct cake_host *hosts; /* for triple isolation [CAKE_QUEUES] */
 	u32	perturbation;/* hash perturbation */
 	u16	flow_quantum;
 	u16	host_quantum;
@@ -272,8 +269,7 @@ cake_hash(struct cake_tin_data *q, const struct sk_buff *skb, int flow_mode)
 	u32 flow_hash=0, srchost_hash, dsthost_hash;
 	u16 reduced_hash, srchost_idx, dsthost_idx;
 
-	if (unlikely(flow_mode == CAKE_FLOW_NONE ||
-		     q->flows_cnt < CAKE_SET_WAYS))
+	if (unlikely(flow_mode == CAKE_FLOW_NONE))
 		return 0;
 
 #if KERNEL_VERSION(4, 2, 0) > LINUX_VERSION_CODE
@@ -351,9 +347,9 @@ cake_hash(struct cake_tin_data *q, const struct sk_buff *skb, int flow_mode)
 			flow_hash ^= dsthost_hash;
 	}
 
-	reduced_hash = reciprocal_scale(flow_hash,    q->flows_cnt);
-	srchost_idx  = reciprocal_scale(srchost_hash, q->flows_cnt);
-	dsthost_idx  = reciprocal_scale(dsthost_hash, q->flows_cnt);
+	reduced_hash = reciprocal_scale(flow_hash,    CAKE_QUEUES);
+	srchost_idx  = reciprocal_scale(srchost_hash, CAKE_QUEUES);
+	dsthost_idx  = reciprocal_scale(dsthost_hash, CAKE_QUEUES);
 
 	/* set-associative hashing */
 	/* fast path if no hash collision (direct lookup succeeds) */
@@ -873,7 +869,7 @@ static void cake_clear_tin(struct Qdisc *sch, u16 tin)
 	struct cake_tin_data *b = &q->tins[tin];
 
 	q->cur_tin = tin;
-	for (q->cur_flow = 0; q->cur_flow < b->flows_cnt; q->cur_flow++)
+	for (q->cur_flow = 0; q->cur_flow < CAKE_QUEUES; q->cur_flow++)
 		while (custom_dequeue(NULL, sch))
 			;
 }
@@ -952,7 +948,7 @@ retry:
 			/* looks like all hosts are exhausted; refresh them */
 			u32 j;
 
-			for(j=0; j < b->flows_cnt; j++) {
+			for(j=0; j < CAKE_QUEUES; j++) {
 				if(b->hosts[j].srchost_deficit < 0)
 					b->hosts[j].srchost_deficit += b->host_quantum;
 				if(b->hosts[j].dsthost_deficit < 0)
@@ -1594,7 +1590,6 @@ static int cake_init(struct Qdisc *sch, struct nlattr *opt)
 	for (i = 0; i < CAKE_MAX_TINS; i++) {
 		struct cake_tin_data *b = q->tins + i;
 
-		b->flows_cnt = CAKE_QUEUES;
 		b->perturbation = prandom_u32();
 		INIT_LIST_HEAD(&b->new_flows);
 		INIT_LIST_HEAD(&b->old_flows);
@@ -1602,17 +1597,17 @@ static int cake_init(struct Qdisc *sch, struct nlattr *opt)
 		b->bulk_flow_count = 0;
 		/* codel_params_init(&b->cparams); */
 
-		b->flows    = cake_zalloc(b->flows_cnt *
+		b->flows    = cake_zalloc(CAKE_QUEUES *
 					     sizeof(struct cake_flow));
-		b->backlogs = cake_zalloc(b->flows_cnt * sizeof(u32));
-		b->tags     = cake_zalloc(b->flows_cnt * sizeof(u32));
-		b->overflow_idx = cake_zalloc(b->flows_cnt * sizeof(u16));
-		b->hosts    = cake_zalloc(b->flows_cnt *
+		b->backlogs = cake_zalloc(CAKE_QUEUES * sizeof(u32));
+		b->tags     = cake_zalloc(CAKE_QUEUES * sizeof(u32));
+		b->overflow_idx = cake_zalloc(CAKE_QUEUES * sizeof(u16));
+		b->hosts    = cake_zalloc(CAKE_QUEUES *
 					     sizeof(struct cake_host));
 		if (!b->flows || !b->backlogs || !b->tags || !b->overflow_idx || !b->hosts)
 			goto nomem;
 
-		for (j = 0; j < b->flows_cnt; j++) {
+		for (j = 0; j < CAKE_QUEUES; j++) {
 			struct cake_flow *flow = b->flows + j;
 
 			INIT_LIST_HEAD(&flow->flowchain);
@@ -1774,13 +1769,13 @@ static int cake_dump_class_stats(struct Qdisc *sch, unsigned long cl,
 	struct gnet_stats_queue qs = {0};
 	struct tc_fq_codel_xstats xstats;
 
-	while (tin < q->tin_cnt && idx >= b->flows_cnt) {
-		idx -= b->flows_cnt;
+	while (tin < q->tin_cnt && idx >= CAKE_QUEUES) {
+		idx -= CAKE_QUEUES;
 		tin++;
 		b++;
 	}
 
-	if (tin < q->tin_cnt && idx >= b->flows_cnt) {
+	if (tin < q->tin_cnt && idx >= CAKE_QUEUES) {
 		const struct cake_flow *flow = &b->flows[idx];
 		const struct sk_buff *skb = flow->head;
 
@@ -1808,7 +1803,7 @@ static int cake_dump_class_stats(struct Qdisc *sch, unsigned long cl,
 	}
 	if (codel_stats_copy_queue(d, NULL, &qs, 0) < 0)
 		return -1;
-	if (tin < q->tin_cnt && idx >= b->flows_cnt)
+	if (tin < q->tin_cnt && idx >= CAKE_QUEUES)
 		return gnet_stats_copy_app(d, &xstats, sizeof(xstats));
 	return 0;
 }
@@ -1824,7 +1819,7 @@ static void cake_walk(struct Qdisc *sch, struct qdisc_walker *arg)
 	for (j = k = 0; j < q->tin_cnt; j++) {
 		struct cake_tin_data *b = &q->tins[j];
 
-		for (i = 0; i < b->flows_cnt; i++, k++) {
+		for (i = 0; i < CAKE_QUEUES; i++, k++) {
 			if (list_empty(&b->flows[i].flowchain) ||
 			    arg->count < arg->skip) {
 				arg->count++;
