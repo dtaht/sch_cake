@@ -143,6 +143,7 @@ struct cake_tin_data {
 	struct cake_flow *flows; /* Flows table [flows_cnt] */
 	u32	*backlogs;	/* backlog table [flows_cnt] */
 	u32 *tags;		/* for set association [flows_cnt] */
+	u16 *overflow_idx;
 	struct cake_host *hosts; /* for triple isolation [flows_cnt] */
 	u32	 flows_cnt;	/* number of flows - must be multiple of
 				 * CAKE_SET_WAYS
@@ -165,8 +166,8 @@ struct cake_tin_data {
 	/* time_next = time_this + ((len * rate_ns) >> rate_shft) */
 	u64	tin_time_next_packet;
 	u32	tin_rate_ns;
-	u16	tin_rate_shft;
 	u32	tin_rate_bps;
+	u16	tin_rate_shft;
 
 	u16	tin_quantum_prio;
 	u16	tin_quantum_band;
@@ -192,6 +193,10 @@ struct cake_tin_data {
 
 struct cake_sched_data {
 	struct cake_tin_data *tins;
+
+	u16		*overflow_heap;
+	u16		overflow_timeout;
+
 	u16		tin_cnt;
 	u8		tin_mode;
 	u8		flow_mode;
@@ -489,9 +494,82 @@ static inline codel_time_t cake_ewma(codel_time_t avg, codel_time_t sample,
 	return avg;
 }
 
-/* FIXME: In terms of speed this is a real hit and could be easily
- *  replaced with tail drop...  BUT it's a slow-path routine.
- */
+static inline void cake_heapify(struct cake_sched_data *q, u16 i)
+{
+	const u32 a = CAKE_MAX_TINS * 1024;
+	u32 m = i;
+
+	do {
+		u32 l = m+m+1;
+		u32 r = l+1;
+
+		u16 mm = q->overflow_heap[m];
+		u16 mt = mm % CAKE_MAX_TINS;
+		u16 mb = mm / CAKE_MAX_TINS;
+
+		if(m != i) {
+			u16 ii = q->overflow_heap[i];
+			u16 it = ii % CAKE_MAX_TINS;
+			u16 ib = ii / CAKE_MAX_TINS;
+
+			q->overflow_heap[i] = mm;
+			q->overflow_heap[m] = ii;
+
+			q->tins[it].overflow_idx[ib] = m;
+			q->tins[mt].overflow_idx[mb] = i;
+
+			i = m;
+		}
+
+		if(l < a) {
+			u16 ll = q->overflow_heap[l];
+			u16 lt = ll % CAKE_MAX_TINS;
+			u16 lb = ll / CAKE_MAX_TINS;
+
+			if(q->tins[lt].backlogs[lb] > q->tins[mt].backlogs[mb]) {
+				m  = l;
+				mt = lt;
+				mb = lb;
+			}
+		}
+
+		if(r < a) {
+			u16 rr = q->overflow_heap[r];
+			u16 rt = rr % CAKE_MAX_TINS;
+			u16 rb = rr / CAKE_MAX_TINS;
+
+			if(q->tins[rt].backlogs[rb] > q->tins[mt].backlogs[mb]) {
+				m  = r;
+				mt = rt;
+				mb = rb;
+			}
+		}
+	} while(m != i);
+}
+
+static inline void cake_heapify_up(struct cake_sched_data *q, u16 i)
+{
+	while(i > 0 && i < CAKE_MAX_TINS * 1024) {
+		u16 p = (i-1) >> 1;
+		u16 pp = q->overflow_heap[p];
+		u16 pt = pp % CAKE_MAX_TINS;
+		u16 pb = pp / CAKE_MAX_TINS;
+
+		u16 ii = q->overflow_heap[i];
+		u16 it = ii % CAKE_MAX_TINS;
+		u16 ib = ii / CAKE_MAX_TINS;
+
+		if(q->tins[it].backlogs[ib] > q->tins[pt].backlogs[pb]) {
+			q->overflow_heap[i] = pp;
+			q->overflow_head[p] = ii;
+			q->tins[it].overflow_idx[ib] = p;
+			q->tins[pt].overflow_idx[pb] = i;
+			i = p;
+		} else {
+			break;
+		}
+	}
+}
 
 static unsigned int cake_drop(struct Qdisc *sch)
 {
@@ -501,9 +579,19 @@ static unsigned int cake_drop(struct Qdisc *sch)
 	struct cake_tin_data *b;
 	struct cake_flow *flow;
 
+	if(!q->overflow_timeout) {
+		/* Build fresh max-heap */
+		for(i = CAKE_MAX_TINS * 1024 / 2; i; i--)
+			cake_heapify(q,i);
+	}
+	q->overflow_timeout = 65535;
+
+	/* select longest queue for pruning */
+	tin = q->overflow_heap[0] % CAKE_MAX_TINS;
+	idx = q->overflow_heap[0] / CAKE_MAX_TINS;
+
 	/* Queue is full; check across tins in use and
 	 * find the fat flow and drop a packet.
-	 */
 	for (j = 0; j < q->tin_cnt; j++) {
 		b = &q->tins[j];
 
@@ -525,6 +613,7 @@ static unsigned int cake_drop(struct Qdisc *sch)
 			}
 		}
 	}
+	 */
 
 	b = &q->tins[tin];
 	flow = &b->flows[idx];
@@ -542,6 +631,9 @@ static unsigned int cake_drop(struct Qdisc *sch)
 
 	kfree_skb(skb);
 	sch->q.qlen--;
+
+	q->overflow_timeout = 65535;
+	cake_heapify(q,0);
 
 	return idx + (tin << 16);
 }
@@ -678,6 +770,9 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 		q->buffer_used      += skb->truesize;
 	}
 
+	if(q->overflow_timeout)
+		cake_heapify_up(q, b->overflow_idx[idx]);
+
 	/* incoming bandwidth capacity estimate */
 	if (q->rate_flags & CAKE_FLAG_AUTORATE_INGRESS)
 	{
@@ -728,16 +823,17 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 		q->buffer_max_used = q->buffer_used;
 
 	if (q->buffer_used > q->buffer_limit) {
-		bool same_flow = false;
-		u32  dropped = 0;
+		u8  same_flow = 0;
+		u32 dropped = 0;
+		u32 old_backlog = q->buffer_used;
 
 		while (q->buffer_used > q->buffer_limit) {
 			dropped++;
 			if (cake_drop(sch) == idx + (tin << 16))
-				same_flow = true;
+				same_flow = 1;
 		}
 		b->drop_overlimit += dropped;
-		qdisc_tree_reduce_backlog(sch, dropped - same_flow, 0 /* FIXME */);
+		qdisc_tree_reduce_backlog(sch, dropped - same_flow, old_backlog - q->buffer_used);
 		return same_flow ? NET_XMIT_CN : NET_XMIT_SUCCESS;
 	}
 	return NET_XMIT_SUCCESS;
@@ -762,6 +858,9 @@ static struct sk_buff *custom_dequeue(struct codel_vars *vars,
 		b->tin_backlog           -= len;
 		q->buffer_used           -= skb->truesize;
 		sch->q.qlen--;
+
+		if(q->overflow_timeout)
+			cake_heapify(q, b->overflow_idx[q->cur_flow]);
 	}
 	return skb;
 }
@@ -935,6 +1034,9 @@ retry:
 	b->tin_time_next_packet +=
 			(len * (u64)b->tin_rate_ns) >> b->tin_rate_shft;
 	q->time_next_packet += (len * (u64)q->rate_ns) >> q->rate_shft;
+
+	if(q->overflow_timeout)
+		q->overflow_timeout--;
 
 	return skb;
 }
@@ -1484,7 +1586,8 @@ static int cake_init(struct Qdisc *sch, struct nlattr *opt)
 	qdisc_watchdog_init(&q->watchdog, sch);
 
 	q->tins = cake_zalloc(CAKE_MAX_TINS * sizeof(struct cake_tin_data));
-	if (!q->tins)
+	q->overflow_heap = cake_zalloc(CAKE_MAX_TINS * 1024 * sizeof(u16));
+	if (!q->tins || !q->overflow_heap)
 		goto nomem;
 
 	for (i = 0; i < CAKE_MAX_TINS; i++) {
@@ -1502,9 +1605,10 @@ static int cake_init(struct Qdisc *sch, struct nlattr *opt)
 					     sizeof(struct cake_flow));
 		b->backlogs = cake_zalloc(b->flows_cnt * sizeof(u32));
 		b->tags     = cake_zalloc(b->flows_cnt * sizeof(u32));
+		b->overflow_idx = cake_zalloc(b->flows_cnt * sizeof(u16));
 		b->hosts    = cake_zalloc(b->flows_cnt *
 					     sizeof(struct cake_host));
-		if (!b->flows || !b->backlogs || !b->tags || !b->hosts)
+		if (!b->flows || !b->backlogs || !b->tags || !b->overflow_idx || !b->hosts)
 			goto nomem;
 
 		for (j = 0; j < b->flows_cnt; j++) {
@@ -1512,6 +1616,9 @@ static int cake_init(struct Qdisc *sch, struct nlattr *opt)
 
 			INIT_LIST_HEAD(&flow->flowchain);
 			codel_vars_init(&flow->cvars);
+
+			q->overflow_heap[j*CAKE_MAX_TINS + i] = j*CAKE_MAX_TINS + i;
+			b->overflow_idx[j] = j*CAKE_MAX_TINS + i;
 		}
 	}
 
