@@ -491,7 +491,7 @@ static inline codel_time_t cake_ewma(codel_time_t avg, codel_time_t sample,
 	return avg;
 }
 
-static inline void cake_heapify(struct cake_sched_data *q, u16 i)
+static void cake_heapify(struct cake_sched_data *q, u16 i)
 {
 	static const u32 a = CAKE_MAX_TINS * CAKE_QUEUES;
 	u32 m = i;
@@ -544,7 +544,7 @@ static inline void cake_heapify(struct cake_sched_data *q, u16 i)
 	} while(m != i);
 }
 
-static inline void cake_heapify_up(struct cake_sched_data *q, u16 i)
+static void cake_heapify_up(struct cake_sched_data *q, u16 i)
 {
 	while(i > 0 && i < CAKE_MAX_TINS * CAKE_QUEUES) {
 		u16 p = (i-1) >> 1;
@@ -572,13 +572,14 @@ static unsigned int cake_drop(struct Qdisc *sch)
 {
 	struct cake_sched_data *q = qdisc_priv(sch);
 	struct sk_buff *skb;
-	u32 idx = 0, tin = 0, i, len;
+	u32 idx = 0, tin = 0, len;
 	struct cake_tin_data *b;
 	struct cake_flow *flow;
 
 	if(!q->overflow_timeout) {
+		int i;
 		/* Build fresh max-heap */
-		for(i = CAKE_MAX_TINS * CAKE_QUEUES / 2; i; i--)
+		for(i = CAKE_MAX_TINS * CAKE_QUEUES / 2; i >= 0; i--)
 			cake_heapify(q,i);
 	}
 	q->overflow_timeout = 65535;
