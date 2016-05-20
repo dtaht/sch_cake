@@ -111,6 +111,7 @@
 
 #define CAKE_SET_WAYS (8)
 #define CAKE_MAX_TINS (8)
+#define CAKE_QUEUES (1024)
 
 #ifndef CAKE_VERSION
 #define CAKE_VERSION "unknown"
@@ -496,7 +497,7 @@ static inline codel_time_t cake_ewma(codel_time_t avg, codel_time_t sample,
 
 static inline void cake_heapify(struct cake_sched_data *q, u16 i)
 {
-	const u32 a = CAKE_MAX_TINS * 1024;
+	static const u32 a = CAKE_MAX_TINS * CAKE_QUEUES;
 	u32 m = i;
 
 	do {
@@ -549,7 +550,7 @@ static inline void cake_heapify(struct cake_sched_data *q, u16 i)
 
 static inline void cake_heapify_up(struct cake_sched_data *q, u16 i)
 {
-	while(i > 0 && i < CAKE_MAX_TINS * 1024) {
+	while(i > 0 && i < CAKE_MAX_TINS * CAKE_QUEUES) {
 		u16 p = (i-1) >> 1;
 		u16 pp = q->overflow_heap[p];
 		u16 pt = pp % CAKE_MAX_TINS;
@@ -581,7 +582,7 @@ static unsigned int cake_drop(struct Qdisc *sch)
 
 	if(!q->overflow_timeout) {
 		/* Build fresh max-heap */
-		for(i = CAKE_MAX_TINS * 1024 / 2; i; i--)
+		for(i = CAKE_MAX_TINS * CAKE_QUEUES / 2; i; i--)
 			cake_heapify(q,i);
 	}
 	q->overflow_timeout = 65535;
@@ -1586,14 +1587,14 @@ static int cake_init(struct Qdisc *sch, struct nlattr *opt)
 	qdisc_watchdog_init(&q->watchdog, sch);
 
 	q->tins = cake_zalloc(CAKE_MAX_TINS * sizeof(struct cake_tin_data));
-	q->overflow_heap = cake_zalloc(CAKE_MAX_TINS * 1024 * sizeof(u16));
+	q->overflow_heap = cake_zalloc(CAKE_MAX_TINS * CAKE_QUEUES * sizeof(u16));
 	if (!q->tins || !q->overflow_heap)
 		goto nomem;
 
 	for (i = 0; i < CAKE_MAX_TINS; i++) {
 		struct cake_tin_data *b = q->tins + i;
 
-		b->flows_cnt = 1024;
+		b->flows_cnt = CAKE_QUEUES;
 		b->perturbation = prandom_u32();
 		INIT_LIST_HEAD(&b->new_flows);
 		INIT_LIST_HEAD(&b->old_flows);
