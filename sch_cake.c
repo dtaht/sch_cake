@@ -582,7 +582,6 @@ static unsigned int cake_drop(struct Qdisc *sch)
 		for(i = CAKE_MAX_TINS * CAKE_QUEUES / 2; i >= 0; i--)
 			cake_heapify(q,i);
 	}
-	q->overflow_timeout = 65535;
 
 	/* select longest queue for pruning */
 	tin = q->overflow_heap[0] % CAKE_MAX_TINS;
