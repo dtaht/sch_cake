@@ -145,7 +145,7 @@ struct codel_vars {
  * so cache them.
  */
 
-static u16 codel_rec_inv_sqrt_cache[REC_INV_SQRT_CACHE] = {0};
+static u32 codel_rec_inv_sqrt_cache[REC_INV_SQRT_CACHE] = {0};
 
 static void codel_vars_init(struct codel_vars *vars)
 {
