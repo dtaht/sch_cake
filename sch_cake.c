@@ -582,6 +582,7 @@ static unsigned int cake_drop(struct Qdisc *sch)
 		for(i = CAKE_MAX_TINS * CAKE_QUEUES / 2; i >= 0; i--)
 			cake_heapify(q,i);
 	}
+	q->overflow_timeout = 65535;
 
 	/* select longest queue for pruning */
 	tin = q->overflow_heap[0] % CAKE_MAX_TINS;
@@ -590,8 +591,12 @@ static unsigned int cake_drop(struct Qdisc *sch)
 	b = &q->tins[tin];
 	flow = &b->flows[idx];
 	skb = dequeue_head(flow);
-	len = qdisc_pkt_len(skb);
+	if(unlikely(!skb)) {
+		cake_heapify(q,0);
+		return NULL;
+	}
 
+	len = qdisc_pkt_len(skb);
 	q->buffer_used      -= skb->truesize;
 	b->backlogs[idx]    -= len;
 	b->tin_backlog      -= len;
@@ -604,7 +609,6 @@ static unsigned int cake_drop(struct Qdisc *sch)
 	kfree_skb(skb);
 	sch->q.qlen--;
 
-	q->overflow_timeout = 65535;
 	cake_heapify(q,0);
 
 	return idx + (tin << 16);
