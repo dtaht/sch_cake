@@ -140,6 +140,10 @@ struct cake_host {
 	u16 dsthost_refcnt;
 };
 
+struct cake_heap_entry {
+	u16 t:3, b:10;
+};
+
 struct cake_tin_data {
 	struct cake_flow *flows; /* Flows table [CAKE_QUEUES] */
 	u32	*backlogs;	/* backlog table [CAKE_QUEUES] */
@@ -192,7 +196,7 @@ struct cake_tin_data {
 struct cake_sched_data {
 	struct cake_tin_data *tins;
 
-	u16		*overflow_heap;
+	struct cake_heap_entry *overflow_heap;
 	u16		overflow_timeout;
 
 	u16		tin_cnt;
@@ -500,45 +504,35 @@ static void cake_heapify(struct cake_sched_data *q, u16 i)
 		u32 l = m+m+1;
 		u32 r = l+1;
 
-		u16 mm = q->overflow_heap[m];
-		u16 mt = mm % CAKE_MAX_TINS;
-		u16 mb = mm / CAKE_MAX_TINS;
+		struct cake_heap_entry mm = q->overflow_heap[m];
 
 		if(m != i) {
-			u16 ii = q->overflow_heap[i];
-			u16 it = ii % CAKE_MAX_TINS;
-			u16 ib = ii / CAKE_MAX_TINS;
+			struct cake_heap_entry ii = q->overflow_heap[i];
 
 			q->overflow_heap[i] = mm;
 			q->overflow_heap[m] = ii;
 
-			q->tins[it].overflow_idx[ib] = m;
-			q->tins[mt].overflow_idx[mb] = i;
+			q->tins[ii.t].overflow_idx[ii.b] = m;
+			q->tins[mm.t].overflow_idx[mm.b] = i;
 
 			i = m;
 		}
 
 		if(l < a) {
-			u16 ll = q->overflow_heap[l];
-			u16 lt = ll % CAKE_MAX_TINS;
-			u16 lb = ll / CAKE_MAX_TINS;
+			struct cake_heap_entry ll = q->overflow_heap[l];
 
-			if(q->tins[lt].backlogs[lb] > q->tins[mt].backlogs[mb]) {
+			if(q->tins[ll.t].backlogs[ll.b] > q->tins[mm.t].backlogs[mm.b]) {
 				m  = l;
-				mt = lt;
-				mb = lb;
+				mm = ll;
 			}
 		}
 
 		if(r < a) {
-			u16 rr = q->overflow_heap[r];
-			u16 rt = rr % CAKE_MAX_TINS;
-			u16 rb = rr / CAKE_MAX_TINS;
+			struct cake_heap_entry rr = q->overflow_heap[r];
 
-			if(q->tins[rt].backlogs[rb] > q->tins[mt].backlogs[mb]) {
+			if(q->tins[rr.t].backlogs[rr.b] > q->tins[mm.t].backlogs[mm.b]) {
 				m  = r;
-				mt = rt;
-				mb = rb;
+				mm = rr;
 			}
 		}
 	} while(m != i);
@@ -548,19 +542,14 @@ static void cake_heapify_up(struct cake_sched_data *q, u16 i)
 {
 	while(i > 0 && i < CAKE_MAX_TINS * CAKE_QUEUES) {
 		u16 p = (i-1) >> 1;
-		u16 pp = q->overflow_heap[p];
-		u16 pt = pp % CAKE_MAX_TINS;
-		u16 pb = pp / CAKE_MAX_TINS;
+		struct cake_heap_entry pp = q->overflow_heap[p];
+		struct cake_heap_entry ii = q->overflow_heap[i];
 
-		u16 ii = q->overflow_heap[i];
-		u16 it = ii % CAKE_MAX_TINS;
-		u16 ib = ii / CAKE_MAX_TINS;
-
-		if(q->tins[it].backlogs[ib] > q->tins[pt].backlogs[pb]) {
+		if(q->tins[ii.t].backlogs[ii.b] > q->tins[pp.t].backlogs[pp.b]) {
 			q->overflow_heap[i] = pp;
 			q->overflow_heap[p] = ii;
-			q->tins[it].overflow_idx[ib] = p;
-			q->tins[pt].overflow_idx[pb] = i;
+			q->tins[ii.t].overflow_idx[ii.b] = p;
+			q->tins[pp.t].overflow_idx[pp.b] = i;
 			i = p;
 		} else {
 			break;
@@ -575,6 +564,7 @@ static unsigned int cake_drop(struct Qdisc *sch)
 	u32 idx = 0, tin = 0, len;
 	struct cake_tin_data *b;
 	struct cake_flow *flow;
+	struct cake_heap_entry qq;
 
 	if(!q->overflow_timeout) {
 		int i;
@@ -585,15 +575,17 @@ static unsigned int cake_drop(struct Qdisc *sch)
 	q->overflow_timeout = 65535;
 
 	/* select longest queue for pruning */
-	tin = q->overflow_heap[0] % CAKE_MAX_TINS;
-	idx = q->overflow_heap[0] / CAKE_MAX_TINS;
+	qq  = q->overflow_heap[0];
+	tin = qq.t;
+	idx = qq.b;
 
 	b = &q->tins[tin];
 	flow = &b->flows[idx];
 	skb = dequeue_head(flow);
 	if(unlikely(!skb)) {
-		cake_heapify(q,0);
-		return NULL;
+		/* heap has gone wrong, rebuild it and try again */
+		q->overflow_timeout = 0;
+		return cake_drop(sch);
 	}
 
 	len = qdisc_pkt_len(skb);
@@ -1561,7 +1553,8 @@ static int cake_init(struct Qdisc *sch, struct nlattr *opt)
 	qdisc_watchdog_init(&q->watchdog, sch);
 
 	q->tins = cake_zalloc(CAKE_MAX_TINS * sizeof(struct cake_tin_data));
-	q->overflow_heap = cake_zalloc(CAKE_MAX_TINS * CAKE_QUEUES * sizeof(u16));
+	q->overflow_heap = cake_zalloc(CAKE_MAX_TINS * CAKE_QUEUES *
+			sizeof(struct cake_heap_entry));
 	if (!q->tins || !q->overflow_heap)
 		goto nomem;
 
@@ -1591,7 +1584,8 @@ static int cake_init(struct Qdisc *sch, struct nlattr *opt)
 			INIT_LIST_HEAD(&flow->flowchain);
 			codel_vars_init(&flow->cvars);
 
-			q->overflow_heap[j*CAKE_MAX_TINS + i] = j*CAKE_MAX_TINS + i;
+			q->overflow_heap[j*CAKE_MAX_TINS + i].t = i;
+			q->overflow_heap[j*CAKE_MAX_TINS + i].b = j;
 			b->overflow_idx[j] = j*CAKE_MAX_TINS + i;
 		}
 	}
