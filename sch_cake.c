@@ -456,8 +456,11 @@ static inline struct sk_buff *dequeue_head(struct cake_flow *flow)
 {
 	struct sk_buff *skb = flow->head;
 
-	flow->head = skb->next;
-	skb->next = NULL;
+	if(skb) {
+		flow->head = skb->next;
+		skb->next = NULL;
+	}
+
 	return skb;
 }
 
@@ -495,47 +498,63 @@ static inline codel_time_t cake_ewma(codel_time_t avg, codel_time_t sample,
 	return avg;
 }
 
+static inline void cake_heap_swap(struct cake_sched_data *q, u16 i, u16 j)
+{
+	struct cake_heap_entry ii = q->overflow_heap[i];
+	struct cake_heap_entry jj = q->overflow_heap[j];
+
+	BUG_ON(q->tins[ii.t].overflow_idx[ii.b] != i);
+	BUG_ON(q->tins[jj.t].overflow_idx[jj.b] != j);
+
+	q->overflow_heap[i] = jj;
+	q->overflow_heap[j] = ii;
+
+	q->tins[ii.t].overflow_idx[ii.b] = j;
+	q->tins[jj.t].overflow_idx[jj.b] = i;
+}
+
+static inline u32 cake_heap_get_backlog(const struct cake_sched_data *q, u16 i)
+{
+	struct cake_heap_entry ii = q->overflow_heap[i];
+
+	return q->tins[ii.t].backlogs[ii.b];
+}
+
 static void cake_heapify(struct cake_sched_data *q, u16 i)
 {
 	static const u32 a = CAKE_MAX_TINS * CAKE_QUEUES;
 	u32 m = i;
+	u32 mb = cake_heap_get_backlog(m);
 
-	do {
+	while(m < a) {
 		u32 l = m+m+1;
 		u32 r = l+1;
 
-		struct cake_heap_entry mm = q->overflow_heap[m];
-
-		if(m != i) {
-			struct cake_heap_entry ii = q->overflow_heap[i];
-
-			q->overflow_heap[i] = mm;
-			q->overflow_heap[m] = ii;
-
-			q->tins[ii.t].overflow_idx[ii.b] = m;
-			q->tins[mm.t].overflow_idx[mm.b] = i;
-
-			i = m;
-		}
-
 		if(l < a) {
-			struct cake_heap_entry ll = q->overflow_heap[l];
+			u32 lb = cake_heap_get_backlog(l);
 
-			if(q->tins[ll.t].backlogs[ll.b] > q->tins[mm.t].backlogs[mm.b]) {
+			if(lb > mb) {
 				m  = l;
-				mm = ll;
+				mb = lb;
 			}
 		}
 
 		if(r < a) {
-			struct cake_heap_entry rr = q->overflow_heap[r];
+			u32 rb = cake_heap_get_backlog(r);
 
-			if(q->tins[rr.t].backlogs[rr.b] > q->tins[mm.t].backlogs[mm.b]) {
+			if(rb > mb) {
 				m  = r;
-				mm = rr;
+				mb = rb;
 			}
 		}
-	} while(m != i);
+
+		if(m != i) {
+			cake_heap_swap(i,m);
+			i = m;
+		} else {
+			break;
+		}
+	}
 }
 
 static void cake_heapify_up(struct cake_sched_data *q, u16 i)
@@ -546,10 +565,7 @@ static void cake_heapify_up(struct cake_sched_data *q, u16 i)
 		struct cake_heap_entry ii = q->overflow_heap[i];
 
 		if(q->tins[ii.t].backlogs[ii.b] > q->tins[pp.t].backlogs[pp.b]) {
-			q->overflow_heap[i] = pp;
-			q->overflow_heap[p] = ii;
-			q->tins[ii.t].overflow_idx[ii.b] = p;
-			q->tins[pp.t].overflow_idx[pp.b] = i;
+			cake_heap_swap(i,p);
 			i = p;
 		} else {
 			break;
@@ -583,9 +599,9 @@ static unsigned int cake_drop(struct Qdisc *sch)
 	flow = &b->flows[idx];
 	skb = dequeue_head(flow);
 	if(unlikely(!skb)) {
-		/* heap has gone wrong, rebuild it and try again */
+		/* heap has gone wrong, rebuild it next time */
 		q->overflow_timeout = 0;
-		return cake_drop(sch);
+		return idx + (tin << 16);
 	}
 
 	len = qdisc_pkt_len(skb);
