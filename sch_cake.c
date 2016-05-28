@@ -561,10 +561,10 @@ static void cake_heapify_up(struct cake_sched_data *q, u16 i)
 {
 	while(i > 0 && i < CAKE_MAX_TINS * CAKE_QUEUES) {
 		u16 p = (i-1) >> 1;
-		struct cake_heap_entry pp = q->overflow_heap[p];
-		struct cake_heap_entry ii = q->overflow_heap[i];
+		u32 ib = cake_heap_get_backlog(i);
+		u32 pb = cake_heap_get_backlog(p);
 
-		if(q->tins[ii.t].backlogs[ii.b] > q->tins[pp.t].backlogs[pp.b]) {
+		if(ib > pb) {
 			cake_heap_swap(i,p);
 			i = p;
 		} else {
