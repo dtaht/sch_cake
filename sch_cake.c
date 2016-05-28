@@ -524,14 +524,14 @@ static void cake_heapify(struct cake_sched_data *q, u16 i)
 {
 	static const u32 a = CAKE_MAX_TINS * CAKE_QUEUES;
 	u32 m = i;
-	u32 mb = cake_heap_get_backlog(m);
+	u32 mb = cake_heap_get_backlog(q,m);
 
 	while(m < a) {
 		u32 l = m+m+1;
 		u32 r = l+1;
 
 		if(l < a) {
-			u32 lb = cake_heap_get_backlog(l);
+			u32 lb = cake_heap_get_backlog(q,l);
 
 			if(lb > mb) {
 				m  = l;
@@ -540,7 +540,7 @@ static void cake_heapify(struct cake_sched_data *q, u16 i)
 		}
 
 		if(r < a) {
-			u32 rb = cake_heap_get_backlog(r);
+			u32 rb = cake_heap_get_backlog(q,r);
 
 			if(rb > mb) {
 				m  = r;
@@ -549,7 +549,7 @@ static void cake_heapify(struct cake_sched_data *q, u16 i)
 		}
 
 		if(m != i) {
-			cake_heap_swap(i,m);
+			cake_heap_swap(q,i,m);
 			i = m;
 		} else {
 			break;
@@ -561,11 +561,11 @@ static void cake_heapify_up(struct cake_sched_data *q, u16 i)
 {
 	while(i > 0 && i < CAKE_MAX_TINS * CAKE_QUEUES) {
 		u16 p = (i-1) >> 1;
-		u32 ib = cake_heap_get_backlog(i);
-		u32 pb = cake_heap_get_backlog(p);
+		u32 ib = cake_heap_get_backlog(q,i);
+		u32 pb = cake_heap_get_backlog(q,p);
 
 		if(ib > pb) {
-			cake_heap_swap(i,p);
+			cake_heap_swap(q,i,p);
 			i = p;
 		} else {
 			break;
