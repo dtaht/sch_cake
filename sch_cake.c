@@ -1531,10 +1531,12 @@ static void cake_destroy(struct Qdisc *sch)
 
 		for (i = 0; i < CAKE_MAX_TINS; i++) {
 			cake_free(q->tins[i].hosts);
+			cake_free(q->tins[i].overflow_idx);
 			cake_free(q->tins[i].tags);
 			cake_free(q->tins[i].backlogs);
 			cake_free(q->tins[i].flows);
 		}
+		cake_free(q->overflow_heap);
 		cake_free(q->tins);
 	}
 }
