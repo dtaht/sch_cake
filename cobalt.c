@@ -47,6 +47,8 @@
 #include <linux/reciprocal_div.h>
 #include <linux/random.h>
 
+#include "cobalt.h"
+
 /*
  * COBALT operates the Codel and BLUE algorithms in parallel, in order
  * to obtain the best features of each.  Codel is excellent on flows
@@ -57,16 +59,6 @@
 #if KERNEL_VERSION(3, 18, 0) > LINUX_VERSION_CODE
 #include "codel5_compat.h"
 #endif
-
-typedef u64 cobalt_time_t;
-typedef s64 cobalt_tdiff_t;
-
-#define MS2TIME(a) (a * (u64) NSEC_PER_MSEC)
-#define US2TIME(a) (a * (u64) NSEC_PER_USEC)
-
-struct cobalt_skb_cb {
-	cobalt_time_t enqueue_time;
-};
 
 static struct cobalt_skb_cb *get_cobalt_cb(const struct sk_buff *skb)
 {
@@ -79,41 +71,6 @@ static cobalt_time_t cobalt_get_enqueue_time(const struct sk_buff *skb)
 	return get_cobalt_cb(skb)->enqueue_time;
 }
 
-/**
- * struct cobalt_params - contains codel and blue parameters
- * @interval:	codel initial drop rate
- * @target:     maximum persistent sojourn time & blue update rate
- * @threshold:	tolerance for product of sojourn time and time above target
- * @p_inc:      increment of blue drop probability
- * @p_dec:      decrement of blue drop probability
- */
-struct cobalt_params {
-	cobalt_time_t	interval;
-	cobalt_time_t	target;
-	cobalt_time_t	threshold;
-	u32          	p_inc;
-	u32          	p_dec;
-};
-
-/**
- * struct cobalt_vars - contains codel and blue variables
- * @count:		  dropping frequency
- * @rec_inv_sqrt: reciprocal value of sqrt(count) >> 1
- * @drop_next:    time to drop next packet, or when we dropped last
- * @drop_count:	  temp count of dropped packets in dequeue()
- * @ecn_mark:     number of packets we ECN marked instead of dropping
- * @p_drop:       BLUE drop probability
- * @dropping:     set if in dropping state
- */
-struct cobalt_vars {
-	u32		count;
-	u32		rec_inv_sqrt;
-	cobalt_time_t	drop_next;
-	cobalt_time_t	blue_timer;
-	u32     p_drop;
-	bool	dropping;
-	bool    ecn_marked;
-};
 #define REC_INV_SQRT_BITS (8 * sizeof(u32))
 #define REC_INV_SQRT_SHIFT (32 - REC_INV_SQRT_BITS)
 #define REC_INV_SQRT_CACHE (16)
