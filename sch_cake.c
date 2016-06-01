@@ -669,7 +669,6 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 				q->time_next_packet = now;
 	}
 
-	b->last_skblen = len;
 	if (unlikely(len > b->max_skblen))
 		b->max_skblen = len;
 
@@ -1663,7 +1662,7 @@ static int cake_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 
 		st->sparse_flows[i]      = b->sparse_flow_count;
 		st->bulk_flows[i]        = b->bulk_flow_count;
-		st->last_skblen[i]       = b->last_skblen;
+		st->last_skblen[i]       = 0;
 		st->max_skblen[i]        = b->max_skblen;
 	}
 	st->capacity_estimate = q->avg_peak_bandwidth;
