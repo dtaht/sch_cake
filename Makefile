@@ -9,8 +9,8 @@ default:
 
 install:
 	install -v -m 644 sch_cake.ko $(IDIR)
-	depmod
-	modprobe sch_cake
+	depmod "$(KERNEL_VERSION)"
+	[ "$(KERNEL_VERSION)" != `uname -r` ] || modprobe sch_cake
 
 clean:
 	rm -rf Module.markers modules.order Module.symvers sch_cake.ko sch_cake.mod.c sch_cake.mod.o sch_cake.o
