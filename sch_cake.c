@@ -56,7 +56,7 @@
 #else
 #include <net/flow_dissector.h>
 #endif
-#include "codel5.h"
+#include "cobalt.h"
 
 #if (KERNEL_VERSION(4,4,11) > LINUX_VERSION_CODE) || ((KERNEL_VERSION(4,5,0) <= LINUX_VERSION_CODE) && (KERNEL_VERSION(4,5,5) > LINUX_VERSION_CODE))
 #define qdisc_tree_reduce_backlog(_a,_b,_c) qdisc_tree_decrease_qlen(_a,_b)
@@ -126,7 +126,7 @@ struct cake_flow {
 	struct list_head  flowchain;
 	s32		  deficit;
 	u32		  dropped; /* Drops (or ECN marks) on this flow */
-	struct codel_vars cvars;
+	struct cobalt_vars cvars;
 	u16		  srchost; /* index into cake_host table */
 	u16		  dsthost;
 }; /* please try to keep this structure <= 64 bytes */
@@ -154,7 +154,7 @@ struct cake_tin_data {
 	u16	flow_quantum;
 	u16	host_quantum;
 
-	struct codel_params cparams;
+	struct cobalt_params cparams;
 	u32	drop_overlimit;
 	u16	bulk_flow_count;
 	u16	sparse_flow_count;
@@ -182,9 +182,9 @@ struct cake_tin_data {
 	u64	bytes;
 
 	/* moving averages */
-	codel_time_t avge_delay;
-	codel_time_t peak_delay;
-	codel_time_t base_delay;
+	cobalt_time_t avge_delay;
+	cobalt_time_t peak_delay;
+	cobalt_time_t base_delay;
 
 	/* hash function stats */
 	u32	way_directs;
@@ -490,7 +490,7 @@ static inline u32 cake_overhead(struct cake_sched_data *q, u32 in)
 	return out;
 }
 
-static inline codel_time_t cake_ewma(codel_time_t avg, codel_time_t sample,
+static inline cobalt_time_t cake_ewma(cobalt_time_t avg, cobalt_time_t sample,
 				     u32 shift)
 {
 	avg -= avg >> shift;
@@ -720,7 +720,7 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 			nskb = segs->next;
 			segs->next = NULL;
 			qdisc_skb_cb(segs)->pkt_len = segs->len;
-			get_codel_cb(segs)->enqueue_time = now;
+			get_cobalt_cb(segs)->enqueue_time = now;
 			flow_queue_add(flow, segs);
 			/* stats */
 			sch->q.qlen++;
@@ -740,7 +740,7 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 		consume_skb(skb);
 	} else {
 		/* not splitting */
-		get_codel_cb(skb)->enqueue_time = now;
+		get_cobalt_cb(skb)->enqueue_time = now;
 		flow_queue_add(flow, skb);
 
 		/* stats */
@@ -824,7 +824,7 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 }
 
 /* Callback from codel_dequeue(); sch->qstats.backlog is already handled. */
-static struct sk_buff *custom_dequeue(struct codel_vars *vars,
+static struct sk_buff *cake_dequeue_one(struct cobalt_vars *vars,
 				      struct Qdisc *sch)
 {
 	struct cake_sched_data *q = qdisc_priv(sch);
@@ -870,8 +870,8 @@ static struct sk_buff *cake_dequeue(struct Qdisc *sch)
 	u16 prev_drop_count, prev_ecn_mark, prev_backlog;
 	u16 deferred_hosts;
 	u32 len;
-	codel_time_t now = ktime_get_ns();
-	codel_time_t delay;
+	cobalt_time_t now = ktime_get_ns();
+	cobalt_time_t delay;
 	bool src_blocked = false, dst_blocked = false;
 
 begin:
@@ -1004,7 +1004,7 @@ retry:
 	b->hosts[flow->dsthost].dsthost_deficit -= len;
 
 	/* collect delay stats */
-	delay = now - codel_get_enqueue_time(skb);
+	delay = now - cobalt_get_enqueue_time(skb);
 	b->avge_delay = cake_ewma(b->avge_delay, delay, 8);
 	b->peak_delay = cake_ewma(b->peak_delay, delay,
 				     delay > b->peak_delay ? 2 : 8);
@@ -1045,7 +1045,7 @@ static const struct nla_policy cake_policy[TCA_CAKE_MAX + 1] = {
 };
 
 static void cake_set_rate(struct cake_tin_data *b, u64 rate, u32 mtu,
-			  codel_time_t ns_target, codel_time_t rtt_est_ns)
+			  cobalt_time_t ns_target, cobalt_time_t rtt_est_ns)
 {
 	/* convert byte-rate into time-per-byte
 	 * so it will always unwedge in reasonable time.
@@ -1053,7 +1053,7 @@ static void cake_set_rate(struct cake_tin_data *b, u64 rate, u32 mtu,
 	static const u64 MIN_RATE = 64;
 	u64 rate_ns = 0;
 	u8  rate_shft = 0;
-	codel_time_t byte_target_ns;
+	cobalt_time_t byte_target_ns;
 	u32 byte_target = mtu + (mtu >> 1);
 
 	b->flow_quantum = 1514;
@@ -1079,8 +1079,8 @@ static void cake_set_rate(struct cake_tin_data *b, u64 rate, u32 mtu,
 	b->cparams.interval = max(rtt_est_ns +
 				     b->cparams.target - ns_target,
 				     b->cparams.target * 2);
-	b->cparams.threshold = (b->cparams.target >> 15) *
-		(b->cparams.interval >> 15) * 2;
+	b->cparams.p_inc = 1 << 24; /* 1/256 */
+	b->cparams.p_dec = 1 << 20; /* 1/4096 */
 }
 
 static void cake_config_besteffort(struct Qdisc *sch)
@@ -1546,7 +1546,7 @@ static int cake_init(struct Qdisc *sch, struct nlattr *opt)
 	struct cake_sched_data *q = qdisc_priv(sch);
 	int i, j;
 
-	codel_cache_init();
+	/* codel_cache_init(); */
 	sch->limit = 10240;
 	q->tin_mode = CAKE_MODE_DIFFSERV4;
 	q->flow_mode  = CAKE_FLOW_FLOWS;
@@ -1600,7 +1600,7 @@ static int cake_init(struct Qdisc *sch, struct nlattr *opt)
 			struct cake_flow *flow = b->flows + j;
 
 			INIT_LIST_HEAD(&flow->flowchain);
-			codel_vars_init(&flow->cvars);
+			cobalt_vars_init(&flow->cvars);
 
 			q->overflow_heap[j*CAKE_MAX_TINS + i].t = i;
 			q->overflow_heap[j*CAKE_MAX_TINS + i].b = j;
@@ -1777,7 +1777,7 @@ static int cake_dump_class_stats(struct Qdisc *sch, unsigned long cl,
 		xstats.class_stats.lastcount = 0;
 		xstats.class_stats.dropping = flow->cvars.dropping;
 		if (flow->cvars.dropping) {
-			codel_tdiff_t delta = flow->cvars.drop_next -
+			cobalt_tdiff_t delta = flow->cvars.drop_next -
 				codel_get_time();
 
 			xstats.class_stats.drop_next = (delta >= 0) ?

@@ -67,7 +67,6 @@ struct cobalt_skb_cb {
 struct cobalt_params {
 	cobalt_time_t	interval;
 	cobalt_time_t	target;
-	cobalt_time_t	threshold;
 	u32          	p_inc;
 	u32          	p_dec;
 };
