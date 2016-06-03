@@ -158,9 +158,9 @@ struct cake_tin_data {
 	u32	drop_overlimit;
 	u16	bulk_flow_count;
 	u16	sparse_flow_count;
+	u16	unresponsive_flow_count;
 
-	u32	last_skblen;
-	u32	max_skblen;
+	u16	max_skblen;
 
 	struct list_head new_flows; /* list of new flows */
 	struct list_head old_flows; /* list of old flows */
@@ -604,6 +604,9 @@ static unsigned int cake_drop(struct Qdisc *sch)
 		return idx + (tin << 16);
 	}
 
+	if(cobalt_queue_full(&flow->cvars, &b->cparams, codel_get_time()))
+		b->unresponsive_flow_count++;
+
 	len = qdisc_pkt_len(skb);
 	q->buffer_used      -= skb->truesize;
 	b->backlogs[idx]    -= len;
@@ -699,7 +702,6 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 				q->time_next_packet = now;
 	}
 
-	b->last_skblen = len;
 	if (unlikely(len > b->max_skblen))
 		b->max_skblen = len;
 
@@ -957,47 +959,49 @@ retry:
 		goto retry;
 	}
 
-	prev_drop_count = flow->cvars.drop_count;
-	prev_ecn_mark   = flow->cvars.ecn_mark;
-	prev_backlog     = b->backlogs[q->cur_flow];
+	/* Retrieve a packet via the AQM */
+	while(1) {
+		skb = cake_dequeue_one(&flow->cvars, sch);
+		if(!skb) {
+			/* this queue was actually empty */
+			if(cobalt_queue_empty(&flow->cvars, &b->cparams, now))
+				b->unresponsive_flow_count--;
 
-	skb = codel_dequeue(sch, &flow->cvars, &b->cparams, now,
-		(b->backlogs[q->cur_flow] * (u64)q->rate_ns) >> q->rate_shft
-			> b->cparams.interval);
-
-	b->tin_dropped  += flow->cvars.drop_count - prev_drop_count;
-	b->tin_ecn_mark += flow->cvars.ecn_mark   - prev_ecn_mark;
-	flow->cvars.ecn_mark = 0;
-	flow->dropped        += flow->cvars.drop_count - prev_drop_count;
-
-	if (!skb) {
-		/* this queue was actually empty */
-		if ((head == &b->new_flows) &&
-		    !list_empty(&b->old_flows)) {
-			list_move_tail(&flow->flowchain, &b->old_flows);
-			b->sparse_flow_count--;
-			b->bulk_flow_count++;
-		} else {
-			list_del_init(&flow->flowchain);
-			if (head == &b->new_flows)
-				b->sparse_flow_count--;
-			else
-				b->bulk_flow_count--;
-			b->hosts[flow->srchost].srchost_refcnt--;
-			b->hosts[flow->dsthost].dsthost_refcnt--;
+			if (flow->cvars.p_drop) {
+				/* keep in the flowchain until the state has decayed to rest */
+				list_move_tail(&flow->flowchain, &b->old_flows);
+				if (head == &b->new_flows) {
+					b->sparse_flow_count--;
+					b->bulk_flow_count++;
+				}
+			} else {
+				/* remove empty queue from the flowchain */
+				list_del_init(&flow->flowchain);
+				if (head == &b->new_flows)
+					b->sparse_flow_count--;
+				else
+					b->bulk_flow_count--;
+				b->hosts[flow->srchost].srchost_refcnt--;
+				b->hosts[flow->dsthost].dsthost_refcnt--;
+			}
+			goto begin;
 		}
-		goto begin;
+
+		/* Last packet in queue may be marked, shouldn't be dropped */
+		if(!cobalt_should_drop(&flow->cvars, &b->cparams, now, skb) || !flow->head)
+			break;
+
+		/* drop this packet, get another one */
+		b->tin_dropped++;
+		flow->dropped++;
+		qdisc_tree_reduce_backlog(sch, 1, qdisc_pkt_len(skb));
+		qdisc_drop(skb, sch);
 	}
 
+	b->tin_ecn_mark += !!flow->cvars.ecn_marked;
 	qdisc_bstats_update(sch, skb);
-	if (flow->cvars.drop_count && sch->q.qlen) {
-		qdisc_tree_reduce_backlog(sch, flow->cvars.drop_count,
-				(prev_backlog - b->backlogs[q->cur_flow]) - qdisc_pkt_len(skb));
-		flow->cvars.drop_count = 0;
-	}
 
 	len = cake_overhead(q, qdisc_pkt_len(skb));
-
 	flow->deficit -= len;
 	b->tin_deficit -= len;
 	b->hosts[flow->srchost].srchost_deficit -= len;
@@ -1705,7 +1709,7 @@ static int cake_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 
 		st->sparse_flows[i]      = b->sparse_flow_count;
 		st->bulk_flows[i]        = b->bulk_flow_count;
-		st->last_skblen[i]       = b->last_skblen;
+		st->last_skblen[i]       = 0;
 		st->max_skblen[i]        = b->max_skblen;
 	}
 	st->capacity_estimate = q->avg_peak_bandwidth;

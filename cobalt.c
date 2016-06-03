@@ -141,10 +141,15 @@ static cobalt_time_t cobalt_control_law(cobalt_time_t t,
 				    REC_INV_SQRT_SHIFT);
 }
 
-/* Call this when a packet had to be dropped due to queue overflow. */
-void cobalt_queue_full(struct cobalt_vars *vars, struct cobalt_params *p, cobalt_time_t now)
+/* Call this when a packet had to be dropped due to queue overflow.
+ * Returns true if the BLUE state was quiescent before but active after this call.
+ */
+bool cobalt_queue_full(struct cobalt_vars *vars, struct cobalt_params *p, cobalt_time_t now)
 {
+	bool up = false;
+
 	if((now - vars->blue_timer) > p->target) {
+		up = !vars->p_drop;
 		vars->p_drop += p->p_inc;
 		if(vars->p_drop < p->p_inc)
 			vars->p_drop = ~0;
@@ -154,19 +159,28 @@ void cobalt_queue_full(struct cobalt_vars *vars, struct cobalt_params *p, cobalt
 	vars->drop_next = now;
 	if(!vars->count)
 		vars->count = 1;
+
+	return up;
 }
 
-/* Call this when the queue was serviced but turned out to be empty. */
+/* Call this when the queue was serviced but turned out to be empty.
+ * Returns true if the BLUE state was active before but quiescent after this call.
+ */
 void cobalt_queue_empty(struct cobalt_vars *vars, struct cobalt_params *p, cobalt_time_t now)
 {
-	if((now - vars->blue_timer) > p->target) {
+	bool down = false;
+
+	if(vars->p_drop && (now - vars->blue_timer) > p->target) {
 		if(vars->p_drop < p->p_dec)
 			vars->p_drop = 0;
 		else
 			vars->p_drop -= p->p_dec;
 		vars->blue_timer = now;
+		down = !vars->p_drop;
 	}
 	vars->dropping = false;
+
+	return down;
 }
 
 /* Call this with a freshly dequeued packet for possible congestion marking.
