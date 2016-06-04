@@ -1,5 +1,5 @@
 obj-m := sch_cake.o
-sch_cake-y := cobalt.o
+sch_cake-y := sch_cake.o cobalt.o
 KERNEL_VERSION := $(shell uname -r)
 IDIR := /lib/modules/$(KERNEL_VERSION)/kernel/net/sched/
 KDIR := /lib/modules/$(KERNEL_VERSION)/build
