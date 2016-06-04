@@ -1686,10 +1686,9 @@ static int cake_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 	for (i = 0; i < q->tin_cnt; i++) {
 		struct cake_tin_data *b = &q->tins[i];
 
-		st->threshold_rate[i]     = b->tin_rate_bps;
-		st->target_us[i]          = cobalt_time_to_us(b->cparams.target);
-		st->interval_us[i]        =
-			codel_time_to_us(b->cparams.interval);
+		st->threshold_rate[i] = b->tin_rate_bps;
+		st->target_us[i]      = cobalt_time_to_us(b->cparams.target);
+		st->interval_us[i]    = cobalt_time_to_us(b->cparams.interval);
 
 		/* TODO FIXME: add missing aspects of these composite stats */
 		st->sent[i].packets       = b->packets;
@@ -1698,9 +1697,9 @@ static int cake_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 		st->ecn_marked[i].packets = b->tin_ecn_mark;
 		st->backlog[i].bytes      = b->tin_backlog;
 
-		st->peak_delay_us[i] = codel_time_to_us(b->peak_delay);
-		st->avge_delay_us[i] = codel_time_to_us(b->avge_delay);
-		st->base_delay_us[i] = codel_time_to_us(b->base_delay);
+		st->peak_delay_us[i] = cobalt_time_to_us(b->peak_delay);
+		st->avge_delay_us[i] = cobalt_time_to_us(b->avge_delay);
+		st->base_delay_us[i] = cobalt_time_to_us(b->base_delay);
 
 		st->way_indirect_hits[i] = b->way_hits;
 		st->way_misses[i]        = b->way_misses;

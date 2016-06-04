@@ -63,7 +63,7 @@ static inline cobalt_time_t cobalt_get_time(void)
 	return ktime_get_ns();
 }
 
-static inline u32 cobalt_time_to_us(codel_time_t val)
+static inline u32 cobalt_time_to_us(cobalt_time_t val)
 {
 	do_div(val, NSEC_PER_USEC);
 	return (u32)val;
