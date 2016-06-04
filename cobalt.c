@@ -122,9 +122,9 @@ void cobalt_vars_init(struct cobalt_vars *vars)
 {
 	memset(vars, 0, sizeof(*vars));
 
-	if(!cobalt_rev_inv_sqrt_cache[0]) {
+	if(!cobalt_rec_inv_sqrt_cache[0]) {
 		cobalt_cache_init();
-		cobalt_rev_inv_sqrt_cache[0] = ~0;
+		cobalt_rec_inv_sqrt_cache[0] = ~0;
 	}
 }
 
@@ -166,7 +166,7 @@ bool cobalt_queue_full(struct cobalt_vars *vars, struct cobalt_params *p, cobalt
 /* Call this when the queue was serviced but turned out to be empty.
  * Returns true if the BLUE state was active before but quiescent after this call.
  */
-void cobalt_queue_empty(struct cobalt_vars *vars, struct cobalt_params *p, cobalt_time_t now)
+bool cobalt_queue_empty(struct cobalt_vars *vars, struct cobalt_params *p, cobalt_time_t now)
 {
 	bool down = false;
 
