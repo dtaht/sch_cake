@@ -1783,8 +1783,8 @@ static int cake_dump_class_stats(struct Qdisc *sch, unsigned long cl,
 				cobalt_get_time();
 
 			xstats.class_stats.drop_next = (delta >= 0) ?
-				codel_time_to_us(delta) :
-				-codel_time_to_us(-delta);
+				cobalt_time_to_us(delta) :
+				-cobalt_time_to_us(-delta);
 		}
 		while (skb) {
 			qs.qlen++;
