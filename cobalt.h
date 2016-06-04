@@ -55,6 +55,14 @@ typedef s64 cobalt_tdiff_t;
 #define MS2TIME(a) (a * (u64) NSEC_PER_MSEC)
 #define US2TIME(a) (a * (u64) NSEC_PER_USEC)
 
+#define codel_stats_copy_queue(a, b, c, d) gnet_stats_copy_queue(a, b, c, d)
+#define codel_watchdog_schedule_ns(a, b, c) qdisc_watchdog_schedule_ns(a, b, c)
+
+static inline cobalt_time_t cobalt_get_time(void)
+{
+	return ktime_get_ns();
+}
+
 struct cobalt_skb_cb {
 	cobalt_time_t enqueue_time;
 };
@@ -97,11 +105,13 @@ struct cobalt_vars {
 /* Initialise visible and internal data. */
 void cobalt_vars_init(struct cobalt_vars *vars);
 
+struct cobalt_skb_cb *get_cobalt_cb(const struct sk_buff *skb);
+
 /* Call this when a packet had to be dropped due to queue overflow. */
-void cobalt_queue_full(struct cobalt_vars *vars, struct cobalt_params *p, cobalt_time_t now);
+bool cobalt_queue_full(struct cobalt_vars *vars, struct cobalt_params *p, cobalt_time_t now);
 
 /* Call this when the queue was serviced but turned out to be empty. */
-void cobalt_queue_empty(struct cobalt_vars *vars, struct cobalt_params *p, cobalt_time_t now);
+bool cobalt_queue_empty(struct cobalt_vars *vars, struct cobalt_params *p, cobalt_time_t now);
 
 /* Call this with a freshly dequeued packet for possible congestion marking.
  * Returns true as an instruction to drop the packet, false for delivery.

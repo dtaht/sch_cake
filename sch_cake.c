@@ -604,7 +604,7 @@ static unsigned int cake_drop(struct Qdisc *sch)
 		return idx + (tin << 16);
 	}
 
-	if(cobalt_queue_full(&flow->cvars, &b->cparams, codel_get_time()))
+	if(cobalt_queue_full(&flow->cvars, &b->cparams, cobalt_get_time()))
 		b->unresponsive_flow_count++;
 
 	len = qdisc_pkt_len(skb);
@@ -671,7 +671,7 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 	struct cake_tin_data *b;
 	struct cake_flow *flow;
 	u32 len = qdisc_pkt_len(skb);
-	u64 now = codel_get_time();
+	u64 now = cobalt_get_time();
 
 	/* extract the Diffserv Precedence field, if it exists */
 	/* and clear DSCP bits if washing */
@@ -858,7 +858,7 @@ static void cake_clear_tin(struct Qdisc *sch, u16 tin)
 
 	q->cur_tin = tin;
 	for (q->cur_flow = 0; q->cur_flow < CAKE_QUEUES; q->cur_flow++)
-		while (custom_dequeue(NULL, sch))
+		while (cake_dequeue_one(NULL, sch))
 			;
 }
 
@@ -1782,7 +1782,7 @@ static int cake_dump_class_stats(struct Qdisc *sch, unsigned long cl,
 		xstats.class_stats.dropping = flow->cvars.dropping;
 		if (flow->cvars.dropping) {
 			cobalt_tdiff_t delta = flow->cvars.drop_next -
-				codel_get_time();
+				cobalt_get_time();
 
 			xstats.class_stats.drop_next = (delta >= 0) ?
 				codel_time_to_us(delta) :
