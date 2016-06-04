@@ -63,6 +63,12 @@ static inline cobalt_time_t cobalt_get_time(void)
 	return ktime_get_ns();
 }
 
+static inline u32 cobalt_time_to_us(codel_time_t val)
+{
+	do_div(val, NSEC_PER_USEC);
+	return (u32)val;
+}
+
 struct cobalt_skb_cb {
 	cobalt_time_t enqueue_time;
 };
@@ -106,6 +112,7 @@ struct cobalt_vars {
 void cobalt_vars_init(struct cobalt_vars *vars);
 
 struct cobalt_skb_cb *get_cobalt_cb(const struct sk_buff *skb);
+cobalt_time_t cobalt_get_enqueue_time(const struct sk_buff *skb);
 
 /* Call this when a packet had to be dropped due to queue overflow. */
 bool cobalt_queue_full(struct cobalt_vars *vars, struct cobalt_params *p, cobalt_time_t now);

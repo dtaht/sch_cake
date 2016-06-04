@@ -869,7 +869,6 @@ static struct sk_buff *cake_dequeue(struct Qdisc *sch)
 	struct cake_tin_data *b = &q->tins[q->cur_tin];
 	struct cake_flow *flow;
 	struct list_head *head;
-	u16 prev_drop_count, prev_ecn_mark, prev_backlog;
 	u16 deferred_hosts;
 	u32 len;
 	cobalt_time_t now = ktime_get_ns();
@@ -1688,7 +1687,7 @@ static int cake_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 		struct cake_tin_data *b = &q->tins[i];
 
 		st->threshold_rate[i]     = b->tin_rate_bps;
-		st->target_us[i]          = codel_time_to_us(b->cparams.target);
+		st->target_us[i]          = cobalt_time_to_us(b->cparams.target);
 		st->interval_us[i]        =
 			codel_time_to_us(b->cparams.interval);
 

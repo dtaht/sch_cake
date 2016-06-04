@@ -66,7 +66,7 @@ struct cobalt_skb_cb *get_cobalt_cb(const struct sk_buff *skb)
 	return (struct cobalt_skb_cb *)qdisc_skb_cb(skb)->data;
 }
 
-static cobalt_time_t cobalt_get_enqueue_time(const struct sk_buff *skb)
+cobalt_time_t cobalt_get_enqueue_time(const struct sk_buff *skb)
 {
 	return get_cobalt_cb(skb)->enqueue_time;
 }
