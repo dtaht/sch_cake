@@ -45,6 +45,9 @@
 #include <linux/types.h>
 #include <linux/ktime.h>
 #include <linux/skbuff.h>
+#include <net/pkt_sched.h>
+#include <net/inet_ecn.h>
+#include <linux/reciprocal_div.h>
 
 typedef u64 cobalt_time_t;
 typedef s64 cobalt_tdiff_t;
