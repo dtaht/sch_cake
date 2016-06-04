@@ -1,4 +1,5 @@
-obj-m := sch_cake.o cobalt.o
+obj-m := sch_cake.o
+sch_cake-y := sch_cake.o cobalt.o
 KERNEL_VERSION := $(shell uname -r)
 IDIR := /lib/modules/$(KERNEL_VERSION)/kernel/net/sched/
 KDIR := /lib/modules/$(KERNEL_VERSION)/build
@@ -13,4 +14,4 @@ install:
 	modprobe sch_cake
 
 clean:
-	rm -rf Module.markers modules.order Module.symvers sch_cake.ko sch_cake.mod.c sch_cake.mod.o sch_cake.o
+	rm -rf Module.markers modules.order Module.symvers sch_cake.ko sch_cake.mod.c sch_cake.mod.o sch_cake.o cobalt.o cobalt.mod.o cobalt.ko
