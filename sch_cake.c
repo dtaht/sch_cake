@@ -809,18 +809,15 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 		q->buffer_max_used = q->buffer_used;
 
 	if (q->buffer_used > q->buffer_limit) {
-		u8  same_flow = 0;
 		u32 dropped = 0;
 		u32 old_backlog = q->buffer_used;
 
 		while (q->buffer_used > q->buffer_limit) {
 			dropped++;
-			if (cake_drop(sch) == idx + (tin << 16))
-				same_flow = 1;
+			cake_drop(sch);
 		}
 		b->drop_overlimit += dropped;
-		qdisc_tree_reduce_backlog(sch, dropped - same_flow, old_backlog - q->buffer_used);
-		return same_flow ? NET_XMIT_CN : NET_XMIT_SUCCESS;
+		qdisc_tree_reduce_backlog(sch, dropped, old_backlog - q->buffer_used);
 	}
 	return NET_XMIT_SUCCESS;
 }
