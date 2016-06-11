@@ -196,7 +196,7 @@ struct cake_tin_data {
 struct cake_sched_data {
 	struct cake_tin_data *tins;
 
-	struct cake_heap_entry *overflow_heap;
+	struct cake_heap_entry overflow_heap[CAKE_QUEUES * CAKE_MAX_TINS];
 	u16		overflow_timeout;
 
 	u16		tin_cnt;
@@ -1528,7 +1528,6 @@ static void cake_destroy(struct Qdisc *sch)
 	if (q->tins) {
 		u32 i;
 
-		cake_free(q->overflow_heap);
 		cake_free(q->tins);
 	}
 }
@@ -1563,9 +1562,7 @@ static int cake_init(struct Qdisc *sch, struct nlattr *opt)
 	qdisc_watchdog_init(&q->watchdog, sch);
 
 	q->tins = cake_zalloc(CAKE_MAX_TINS * sizeof(struct cake_tin_data));
-	q->overflow_heap = cake_zalloc(CAKE_MAX_TINS * CAKE_QUEUES *
-			sizeof(struct cake_heap_entry));
-	if (!q->tins || !q->overflow_heap)
+	if (!q->tins)
 		goto nomem;
 
 	for (i = 0; i < CAKE_MAX_TINS; i++) {
