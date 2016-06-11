@@ -145,12 +145,12 @@ struct cake_heap_entry {
 };
 
 struct cake_tin_data {
-	struct cake_flow *flows; /* Flows table [CAKE_QUEUES] */
-	u32	*backlogs;	/* backlog table [CAKE_QUEUES] */
-	u32 *tags;		/* for set association [CAKE_QUEUES] */
-	u16 *overflow_idx;
-	struct cake_host *hosts; /* for triple isolation [CAKE_QUEUES] */
-	u32	perturbation;/* hash perturbation */
+	struct cake_flow flows[CAKE_QUEUES];
+	u32	backlogs[CAKE_QUEUES];
+	u32 tags[CAKE_QUEUES];	/* for set association */
+	u16 overflow_idx[CAKE_QUEUES];
+	struct cake_host hosts[CAKE_QUEUES]; /* for triple isolation */
+	u32	perturbation;
 	u16	flow_quantum;
 	u16	host_quantum;
 
@@ -1528,13 +1528,6 @@ static void cake_destroy(struct Qdisc *sch)
 	if (q->tins) {
 		u32 i;
 
-		for (i = 0; i < CAKE_MAX_TINS; i++) {
-			cake_free(q->tins[i].hosts);
-			cake_free(q->tins[i].overflow_idx);
-			cake_free(q->tins[i].tags);
-			cake_free(q->tins[i].backlogs);
-			cake_free(q->tins[i].flows);
-		}
 		cake_free(q->overflow_heap);
 		cake_free(q->tins);
 	}
@@ -1584,16 +1577,6 @@ static int cake_init(struct Qdisc *sch, struct nlattr *opt)
 		b->sparse_flow_count = 0;
 		b->bulk_flow_count = 0;
 		/* codel_params_init(&b->cparams); */
-
-		b->flows    = cake_zalloc(CAKE_QUEUES *
-					     sizeof(struct cake_flow));
-		b->backlogs = cake_zalloc(CAKE_QUEUES * sizeof(u32));
-		b->tags     = cake_zalloc(CAKE_QUEUES * sizeof(u32));
-		b->overflow_idx = cake_zalloc(CAKE_QUEUES * sizeof(u16));
-		b->hosts    = cake_zalloc(CAKE_QUEUES *
-					     sizeof(struct cake_host));
-		if (!b->flows || !b->backlogs || !b->tags || !b->overflow_idx || !b->hosts)
-			goto nomem;
 
 		for (j = 0; j < CAKE_QUEUES; j++) {
 			struct cake_flow *flow = b->flows + j;
