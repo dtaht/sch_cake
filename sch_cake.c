@@ -612,6 +612,7 @@ static unsigned int cake_drop(struct Qdisc *sch)
 	b->backlogs[idx]    -= len;
 	b->tin_backlog      -= len;
 	sch->qstats.backlog -= len;
+	qdisc_tree_reduce_backlog(sch, 1, len);
 
 	b->tin_dropped++;
 	sch->qstats.drops++;
@@ -810,14 +811,12 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 
 	if (q->buffer_used > q->buffer_limit) {
 		u32 dropped = 0;
-		u32 old_backlog = q->buffer_used;
 
 		while (q->buffer_used > q->buffer_limit) {
 			dropped++;
 			cake_drop(sch);
 		}
 		b->drop_overlimit += dropped;
-		qdisc_tree_reduce_backlog(sch, dropped, old_backlog - q->buffer_used);
 	}
 	return NET_XMIT_SUCCESS;
 }
