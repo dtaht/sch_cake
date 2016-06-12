@@ -1525,11 +1525,8 @@ static void cake_destroy(struct Qdisc *sch)
 
 	qdisc_watchdog_cancel(&q->watchdog);
 
-	if (q->tins) {
-		u32 i;
-
+	if (q->tins)
 		cake_free(q->tins);
-	}
 }
 
 static int cake_init(struct Qdisc *sch, struct nlattr *opt)
@@ -1732,18 +1729,12 @@ static int cake_dump_class_stats(struct Qdisc *sch, unsigned long cl,
 {
 	/* reuse fq_codel stats format */
 	struct cake_sched_data *q = qdisc_priv(sch);
-	struct cake_tin_data *b = q->tins;
-	u32 tin = 0, idx = cl - 1;
+	u32 tin = (cl-1) / CAKE_QUEUES, idx = (cl-1) % CAKE_QUEUES;
+	struct cake_tin_data *b = &q->tins[tin];
 	struct gnet_stats_queue qs = {0};
 	struct tc_fq_codel_xstats xstats;
 
-	while (tin < q->tin_cnt && idx >= CAKE_QUEUES) {
-		idx -= CAKE_QUEUES;
-		tin++;
-		b++;
-	}
-
-	if (tin < q->tin_cnt && idx >= CAKE_QUEUES) {
+	if (tin < q->tin_cnt && idx < CAKE_QUEUES) {
 		const struct cake_flow *flow = &b->flows[idx];
 		const struct sk_buff *skb = flow->head;
 
@@ -1771,7 +1762,7 @@ static int cake_dump_class_stats(struct Qdisc *sch, unsigned long cl,
 	}
 	if (codel_stats_copy_queue(d, NULL, &qs, 0) < 0)
 		return -1;
-	if (tin < q->tin_cnt && idx >= CAKE_QUEUES)
+	if (tin < q->tin_cnt && idx < CAKE_QUEUES)
 		return gnet_stats_copy_app(d, &xstats, sizeof(xstats));
 	return 0;
 }
