@@ -821,7 +821,6 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 	return NET_XMIT_SUCCESS;
 }
 
-/* Callback from codel_dequeue(); sch->qstats.backlog is already handled. */
 static struct sk_buff *cake_dequeue_one(struct cobalt_vars *vars,
 				      struct Qdisc *sch)
 {
@@ -838,6 +837,7 @@ static struct sk_buff *cake_dequeue_one(struct cobalt_vars *vars,
 		len = qdisc_pkt_len(skb);
 		b->backlogs[q->cur_flow] -= len;
 		b->tin_backlog           -= len;
+		sch->qstats.backlog      -= len;
 		q->buffer_used           -= skb->truesize;
 		sch->q.qlen--;
 
