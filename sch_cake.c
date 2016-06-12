@@ -723,7 +723,7 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 			nskb = segs->next;
 			segs->next = NULL;
 			qdisc_skb_cb(segs)->pkt_len = segs->len;
-			get_cobalt_cb(segs)->enqueue_time = now;
+			cobalt_set_enqueue_time(segs, now);
 			flow_queue_add(flow, segs);
 			/* stats */
 			sch->q.qlen++;
@@ -743,7 +743,7 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 		consume_skb(skb);
 	} else {
 		/* not splitting */
-		get_cobalt_cb(skb)->enqueue_time = now;
+		cobalt_set_enqueue_time(skb, now);
 		flow_queue_add(flow, skb);
 
 		/* stats */
@@ -1574,13 +1574,14 @@ static int cake_init(struct Qdisc *sch, struct nlattr *opt)
 
 		for (j = 0; j < CAKE_QUEUES; j++) {
 			struct cake_flow *flow = b->flows + j;
+			u32 k = j*CAKE_MAX_TINS + i;
 
 			INIT_LIST_HEAD(&flow->flowchain);
 			cobalt_vars_init(&flow->cvars);
 
-			q->overflow_heap[j*CAKE_MAX_TINS + i].t = i;
-			q->overflow_heap[j*CAKE_MAX_TINS + i].b = j;
-			b->overflow_idx[j] = j*CAKE_MAX_TINS + i;
+			q->overflow_heap[k].t = i;
+			q->overflow_heap[k].b = j;
+			b->overflow_idx[j] = k;
 		}
 	}
 

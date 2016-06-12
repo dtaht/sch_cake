@@ -71,10 +71,12 @@ cobalt_time_t cobalt_get_enqueue_time(const struct sk_buff *skb)
 	return get_cobalt_cb(skb)->enqueue_time;
 }
 
-#define REC_INV_SQRT_BITS (8 * sizeof(u32))
-#define REC_INV_SQRT_SHIFT (32 - REC_INV_SQRT_BITS)
-#define REC_INV_SQRT_CACHE (16)
+void cobalt_set_enqueue_time(struct sk_buff *skb, cobalt_time_t now)
+{
+	get_cobalt_cb(skb)->enqueue_time = now;
+}
 
+#define REC_INV_SQRT_CACHE (16)
 static u32 cobalt_rec_inv_sqrt_cache[REC_INV_SQRT_CACHE] = {0};
 
 /*
@@ -85,18 +87,22 @@ static u32 cobalt_rec_inv_sqrt_cache[REC_INV_SQRT_CACHE] = {0};
  */
 static void cobalt_Newton_step(struct cobalt_vars *vars)
 {
-	if (vars->count < REC_INV_SQRT_CACHE &&
-	   likely(cobalt_rec_inv_sqrt_cache[vars->count])) {
+	u32 invsqrt = vars->rec_inv_sqrt;
+	u32 invsqrt2 = ((u64)invsqrt * invsqrt) >> 32;
+	u64 val = (3LL << 32) - ((u64)vars->count * invsqrt2);
+
+	val >>= 2; /* avoid overflow in following multiply */
+	val = (val * invsqrt) >> (32 - 2 + 1);
+
+	vars->rec_inv_sqrt = val;
+}
+
+static void cobalt_invsqrt(struct cobalt_vars *vars)
+{
+	if (vars->count < REC_INV_SQRT_CACHE) {
 		vars->rec_inv_sqrt = cobalt_rec_inv_sqrt_cache[vars->count];
 	} else {
-		u32 invsqrt = ((u32)vars->rec_inv_sqrt) << REC_INV_SQRT_SHIFT;
-		u32 invsqrt2 = ((u64)invsqrt * invsqrt) >> 32;
-		u64 val = (3LL << 32) - ((u64)vars->count * invsqrt2);
-
-		val >>= 2; /* avoid overflow in following multiply */
-		val = (val * invsqrt) >> (32 - 2 + 1);
-
-		vars->rec_inv_sqrt = val >> REC_INV_SQRT_SHIFT;
+		cobalt_Newton_step(vars);
 	}
 }
 
@@ -104,8 +110,8 @@ static void cobalt_cache_init(void)
 {
 	struct cobalt_vars v;
 
-	cobalt_vars_init(&v);
-	v.rec_inv_sqrt = ~0U >> REC_INV_SQRT_SHIFT;
+	memset(vars, 0, sizeof(*vars));
+	v.rec_inv_sqrt = ~0U;
 	cobalt_rec_inv_sqrt_cache[0] = v.rec_inv_sqrt;
 
 	for (v.count = 1; v.count < REC_INV_SQRT_CACHE; v.count++) {
@@ -137,8 +143,7 @@ static cobalt_time_t cobalt_control_law(cobalt_time_t t,
 				      cobalt_time_t interval,
 				      u32 rec_inv_sqrt)
 {
-	return t + reciprocal_scale(interval, rec_inv_sqrt <<
-				    REC_INV_SQRT_SHIFT);
+	return t + reciprocal_scale(interval, rec_inv_sqrt);
 }
 
 /* Call this when a packet had to be dropped due to queue overflow.
@@ -219,12 +224,12 @@ bool cobalt_should_drop(struct cobalt_vars *vars,
 		vars->count++;
 		if(!vars->count)
 			vars->count--;
-		cobalt_Newton_step(vars);
+		cobalt_invsqrt(vars);
 		vars->drop_next = cobalt_control_law(vars->drop_next, p->interval, vars->rec_inv_sqrt);
 	} else {
 		while(next_due) {
 			vars->count--;
-			cobalt_Newton_step(vars);
+			cobalt_invsqrt(vars);
 			vars->drop_next = cobalt_control_law(vars->drop_next, p->interval, vars->rec_inv_sqrt);
 			schedule = now - vars->drop_next;
 			next_due = vars->count && schedule >= 0;
