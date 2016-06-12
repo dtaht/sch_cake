@@ -110,7 +110,7 @@ static void cobalt_cache_init(void)
 {
 	struct cobalt_vars v;
 
-	memset(vars, 0, sizeof(*vars));
+	memset(&v, 0, sizeof(v));
 	v.rec_inv_sqrt = ~0U;
 	cobalt_rec_inv_sqrt_cache[0] = v.rec_inv_sqrt;
 
