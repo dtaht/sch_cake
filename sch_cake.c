@@ -759,7 +759,7 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 			if (q->rate_flags & CAKE_FLAG_AUTORATE_INGRESS &&
 				now - q->last_reconfig_time >
 				(NSEC_PER_SEC / 4)) {
-				q->rate_bps = (q->avg_peak_bandwidth * 15) >> 4;
+				q->rate_bps = (q->avg_peak_bandwidth * 7) >> 3;
 				cake_reconfigure(sch);
 			}
 		}
