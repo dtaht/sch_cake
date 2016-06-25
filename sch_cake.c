@@ -119,16 +119,23 @@
 static char *cake_version __attribute__((used)) = "Cake version: "
 		CAKE_VERSION;
 
+enum {
+	CAKE_SET_NONE = 0,
+	CAKE_SET_SPARSE,
+	CAKE_SET_BULK,
+	CAKE_SET_DECAYING
+};
+
 struct cake_flow {
 	/* this stuff is all needed per-flow at dequeue time */
 	struct sk_buff	  *head;
 	struct sk_buff	  *tail;
 	struct list_head  flowchain;
 	s32		  deficit;
-	u32		  dropped; /* Drops (or ECN marks) on this flow */
 	struct cobalt_vars cvars;
 	u16		  srchost; /* index into cake_host table */
 	u16		  dsthost;
+	u8		  set;
 }; /* please try to keep this structure <= 64 bytes */
 
 struct cake_host {
@@ -158,12 +165,14 @@ struct cake_tin_data {
 	u32	drop_overlimit;
 	u16	bulk_flow_count;
 	u16	sparse_flow_count;
+	u16	decaying_flow_count;
 	u16	unresponsive_flow_count;
 
 	u16	max_skblen;
 
-	struct list_head new_flows; /* list of new flows */
-	struct list_head old_flows; /* list of old flows */
+	struct list_head new_flows;
+	struct list_head old_flows;
+	struct list_head decaying_flows;
 
 	/* time_next = time_this + ((len * rate_ns) >> rate_shft) */
 	u64	tin_time_next_packet;
@@ -381,8 +390,7 @@ cake_hash(struct cake_tin_data *q, const struct sk_buff *skb, int flow_mode)
 		 */
 		for (i = 0; i < CAKE_SET_WAYS;
 			 i++, k = (k + 1) % CAKE_SET_WAYS) {
-			if (list_empty(&q->flows[outer_hash + k].
-					   flowchain)) {
+			if (!flows[outer_hash + k].set)) {
 				q->way_misses++;
 				need_allocate_src = true;
 				need_allocate_dst = true;
@@ -615,7 +623,6 @@ static unsigned int cake_drop(struct Qdisc *sch)
 
 	b->tin_dropped++;
 	sch->qstats.drops++;
-	flow->dropped++;
 
 	kfree_skb(skb);
 	sch->q.qlen--;
@@ -769,11 +776,16 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 	}
 
 	/* flowchain */
-	if (list_empty(&flow->flowchain)) {
-		list_add_tail(&flow->flowchain, &b->new_flows);
+	if (!flow->set || flow->set == CAKE_SET_DECAYING) {
+		if(!flow->set) {
+			list_add_tail(&flow->flowchain, &b->new_flows);
+		} else {
+			b->decaying_flow_count--;
+			list_move_tail(&flow->flowchain, &b->new_flows);
+		}
+		flow->set = CAKE_SET_SPARSE;
 		b->sparse_flow_count++;
 		flow->deficit = b->flow_quantum;
-		flow->dropped = 0;
 	}
 
 	if (q->buffer_used > q->buffer_max_used)
@@ -791,8 +803,7 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 	return NET_XMIT_SUCCESS;
 }
 
-static struct sk_buff *cake_dequeue_one(struct cobalt_vars *vars,
-				      struct Qdisc *sch)
+static struct sk_buff *cake_dequeue_one(struct Qdisc *sch)
 {
 	struct cake_sched_data *q = qdisc_priv(sch);
 	struct cake_tin_data *b = &q->tins[q->cur_tin];
@@ -824,7 +835,7 @@ static void cake_clear_tin(struct Qdisc *sch, u16 tin)
 
 	q->cur_tin = tin;
 	for (q->cur_flow = 0; q->cur_flow < CAKE_QUEUES; q->cur_flow++)
-		while (cake_dequeue_one(NULL, sch))
+		while (cake_dequeue_one(sch))
 			;
 }
 
@@ -875,12 +886,29 @@ begin:
 
 retry:
 	/* service this class */
+	if(deferred_hosts >= b->sparse_flow_count + b->bulk_flow_count) {
+		/* looks like all hosts are exhausted; refresh them */
+		u32 j;
+
+		for(j=0; j < CAKE_QUEUES; j++) {
+			if(b->hosts[j].srchost_deficit < 0)
+				b->hosts[j].srchost_deficit += b->host_quantum;
+			if(b->hosts[j].dsthost_deficit < 0)
+				b->hosts[j].dsthost_deficit += b->host_quantum;
+		}
+		deferred_hosts = 0;
+	}
+
 	head = &b->new_flows;
 	if (list_empty(head) || deferred_hosts >= b->sparse_flow_count) {
 		head = &b->old_flows;
 
-		if (unlikely(list_empty(head)))
-			goto begin;
+		if (unlikely(list_empty(head))) {
+			head = &b->decaying_flows;
+
+			if (unlikely(list_empty(head)))
+				goto begin;
+		}
 	}
 	flow = list_first_entry(head, struct cake_flow, flowchain);
 	q->cur_flow = flow - b->flows;
@@ -896,29 +924,32 @@ retry:
 		/* this host is exhausted, so defer the flow */
 		list_move_tail(&flow->flowchain, head);
 		deferred_hosts++;
-
-		if(deferred_hosts >= b->sparse_flow_count + b->bulk_flow_count) {
-			/* looks like all hosts are exhausted; refresh them */
-			u32 j;
-
-			for(j=0; j < CAKE_QUEUES; j++) {
-				if(b->hosts[j].srchost_deficit < 0)
-					b->hosts[j].srchost_deficit += b->host_quantum;
-				if(b->hosts[j].dsthost_deficit < 0)
-					b->hosts[j].dsthost_deficit += b->host_quantum;
-			}
-			deferred_hosts = 0;
-		}
 		goto retry;
 	}
 
 	/* flow isolation (DRR++) */
 	if (flow->deficit <= 0) {
 		flow->deficit += b->flow_quantum;
-		list_move_tail(&flow->flowchain, &b->old_flows);
-		if (head == &b->new_flows) {
-			b->sparse_flow_count--;
-			b->bulk_flow_count++;
+		if(flow->head) {
+			list_move_tail(&flow->flowchain, &b->old_flows);
+			flow->set = CAKE_SET_BULK;
+			if (head == &b->new_flows) {
+				b->sparse_flow_count--;
+				b->bulk_flow_count++;
+			} else if(head == &b->decaying_flows) {
+				b->decaying_flow_count--;
+				b->bulk_flow_count++;
+			}
+		} else {
+			list_move_tail(&flow->flowchain, &b->decaying_flows);
+			flow->set = CAKE_SET_DECAYING;
+			if (head == &b->new_flows) {
+				b->sparse_flow_count--;
+				b->decaying_flow_count++;
+			} else if(head == &b->old_flows) {
+				b->bulk_flow_count--;
+				b->decaying_flow_count++;
+			}
 		}
 		deferred_hosts = 0;
 		goto retry;
@@ -926,7 +957,7 @@ retry:
 
 	/* Retrieve a packet via the AQM */
 	while(1) {
-		skb = cake_dequeue_one(&flow->cvars, sch);
+		skb = cake_dequeue_one(sch);
 		if(!skb) {
 			/* this queue was actually empty */
 			if(cobalt_queue_empty(&flow->cvars, &b->cparams, now))
@@ -934,18 +965,25 @@ retry:
 
 			if (flow->cvars.p_drop) {
 				/* keep in the flowchain until the state has decayed to rest */
-				list_move_tail(&flow->flowchain, &b->old_flows);
+				list_move_tail(&flow->flowchain, &b->decaying_flows);
+				flow->set = CAKE_SET_DECAYING;
 				if (head == &b->new_flows) {
 					b->sparse_flow_count--;
-					b->bulk_flow_count++;
+					b->decaying_flow_count++;
+				} else if(head == &b->old_flows) {
+					b->bulk_flow_count--;
+					b->decaying_flow_count++;
 				}
 			} else {
 				/* remove empty queue from the flowchain */
 				list_del_init(&flow->flowchain);
+				flow->set = CAKE_SET_NONE;
 				if (head == &b->new_flows)
 					b->sparse_flow_count--;
-				else
+				else if(head == &b->old_flows)
 					b->bulk_flow_count--;
+				else
+					b->decaying_flow_count--;
 				b->hosts[flow->srchost].srchost_refcnt--;
 				b->hosts[flow->dsthost].dsthost_refcnt--;
 			}
@@ -958,7 +996,6 @@ retry:
 
 		/* drop this packet, get another one */
 		b->tin_dropped++;
-		flow->dropped++;
 		qdisc_tree_reduce_backlog(sch, 1, qdisc_pkt_len(skb));
 		qdisc_drop(skb, sch);
 	}
@@ -1530,8 +1567,10 @@ static int cake_init(struct Qdisc *sch, struct nlattr *opt)
 		b->perturbation = prandom_u32();
 		INIT_LIST_HEAD(&b->new_flows);
 		INIT_LIST_HEAD(&b->old_flows);
+		INIT_LIST_HEAD(&b->decaying_flows);
 		b->sparse_flow_count = 0;
 		b->bulk_flow_count = 0;
+		b->decaying_flow_count = 0;
 		/* codel_params_init(&b->cparams); */
 
 		for (j = 0; j < CAKE_QUEUES; j++) {
@@ -1637,7 +1676,7 @@ static int cake_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 		st->way_misses[i]        = b->way_misses;
 		st->way_collisions[i]    = b->way_collisions;
 
-		st->sparse_flows[i]      = b->sparse_flow_count;
+		st->sparse_flows[i]      = b->sparse_flow_count + b->decaying_flow_count;
 		st->bulk_flows[i]        = b->bulk_flow_count;
 		st->last_skblen[i]       = 0;
 		st->max_skblen[i]        = b->max_skblen;
@@ -1717,7 +1756,7 @@ static int cake_dump_class_stats(struct Qdisc *sch, unsigned long cl,
 			skb = skb->next;
 		}
 		qs.backlog = b->backlogs[idx];
-		qs.drops = flow->dropped;
+		qs.drops = 0;
 	}
 	if (codel_stats_copy_queue(d, NULL, &qs, 0) < 0)
 		return -1;
