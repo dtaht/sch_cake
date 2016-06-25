@@ -390,7 +390,7 @@ cake_hash(struct cake_tin_data *q, const struct sk_buff *skb, int flow_mode)
 		 */
 		for (i = 0; i < CAKE_SET_WAYS;
 			 i++, k = (k + 1) % CAKE_SET_WAYS) {
-			if (!q->flows[outer_hash + k].set)) {
+			if (!q->flows[outer_hash + k].set) {
 				q->way_misses++;
 				need_allocate_src = true;
 				need_allocate_dst = true;
