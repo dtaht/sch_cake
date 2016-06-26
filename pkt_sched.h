@@ -876,7 +876,7 @@ struct tc_cake_traffic_stats {
 
 #define TC_CAKE_MAX_TINS (8)
 struct tc_cake_xstats {
-	__u16 version;  /* == 3, increments when struct extended */
+	__u16 version;  /* == 4, increments when struct extended */
 	__u8  max_tins; /* == TC_CAKE_MAX_TINS */
 	__u8  tin_cnt;  /* <= TC_CAKE_MAX_TINS */
 
@@ -895,7 +895,7 @@ struct tc_cake_xstats {
 	__u32 base_delay_us    [TC_CAKE_MAX_TINS]; /* ~= delay to sparse flows */
 	__u16 sparse_flows     [TC_CAKE_MAX_TINS];
 	__u16 bulk_flows       [TC_CAKE_MAX_TINS];
-	__u32 last_skblen      [TC_CAKE_MAX_TINS]; /* skb_headlen */
+	__u32 unresponse_flows [TC_CAKE_MAX_TINS]; /* version 4 */
 	__u32 max_skblen       [TC_CAKE_MAX_TINS];
 	__u32 capacity_estimate;  /* version 2 */
 	__u32 memory_limit;       /* version 3 */
