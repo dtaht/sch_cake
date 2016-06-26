@@ -850,7 +850,7 @@ static struct sk_buff *cake_dequeue(struct Qdisc *sch)
 	u32 len;
 	cobalt_time_t now = ktime_get_ns();
 	cobalt_time_t delay;
-	bool src_blocked = false, dst_blocked = false;
+	bool src_blocked = false, dst_blocked = false, first_flow = true;
 
 begin:
 	if (!sch->q.qlen)
@@ -899,19 +899,21 @@ retry:
 		deferred_hosts = 0;
 	}
 
-	head = &b->new_flows;
-	if (list_empty(head) || deferred_hosts >= b->sparse_flow_count) {
-		head = &b->old_flows;
-
-		if (unlikely(list_empty(head))) {
-			head = &b->decaying_flows;
-
-			if (unlikely(list_empty(head)))
-				goto begin;
+	head = &b->decaying_flows;
+	if (!first_flow || list_empty(head)) {
+		head = &b->new_flows;
+		if (list_empty(head) || deferred_hosts >= b->sparse_flow_count) {
+			head = &b->old_flows;
+			if (unlikely(list_empty(head))) {
+				head = &b->decaying_flows;
+				if (unlikely(list_empty(head)))
+					goto begin;
+			}
 		}
 	}
 	flow = list_first_entry(head, struct cake_flow, flowchain);
 	q->cur_flow = flow - b->flows;
+	first_flow = false;
 
 	/* triple isolation (modified dual DRR) */
 	src_blocked = (q->flow_mode & CAKE_FLOW_DUAL_SRC) == CAKE_FLOW_DUAL_SRC &&
@@ -963,7 +965,7 @@ retry:
 			if(cobalt_queue_empty(&flow->cvars, &b->cparams, now))
 				b->unresponsive_flow_count--;
 
-			if (flow->cvars.p_drop) {
+			if (flow->cvars.p_drop || flow->cvars.count) {
 				/* keep in the flowchain until the state has decayed to rest */
 				list_move_tail(&flow->flowchain, &b->decaying_flows);
 				flow->set = CAKE_SET_DECAYING;
@@ -1650,7 +1652,7 @@ static int cake_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 
 	BUG_ON(q->tin_cnt > TC_CAKE_MAX_TINS);
 
-	st->version = 3;
+	st->version = 4;
 	st->max_tins = TC_CAKE_MAX_TINS;
 	st->tin_cnt = q->tin_cnt;
 
@@ -1678,7 +1680,7 @@ static int cake_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 
 		st->sparse_flows[i]      = b->sparse_flow_count + b->decaying_flow_count;
 		st->bulk_flows[i]        = b->bulk_flow_count;
-		st->last_skblen[i]       = 0;
+		st->unresponse_flows[i]  = b->unresponsive_flow_count;
 		st->max_skblen[i]        = b->max_skblen;
 	}
 	st->capacity_estimate = q->avg_peak_bandwidth;

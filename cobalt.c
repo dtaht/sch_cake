@@ -185,6 +185,12 @@ bool cobalt_queue_empty(struct cobalt_vars *vars, struct cobalt_params *p, cobal
 	}
 	vars->dropping = false;
 
+	if(vars->count && (now - vars->drop_next) >= 0) {
+		vars->count--;
+		cobalt_invsqrt(vars);
+		vars->drop_next = cobalt_control_law(vars->drop_next, p->interval, vars->rec_inv_sqrt);
+	}
+
 	return down;
 }
 
