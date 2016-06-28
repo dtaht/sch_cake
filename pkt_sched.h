@@ -895,7 +895,8 @@ struct tc_cake_xstats {
 	__u32 base_delay_us    [TC_CAKE_MAX_TINS]; /* ~= delay to sparse flows */
 	__u16 sparse_flows     [TC_CAKE_MAX_TINS];
 	__u16 bulk_flows       [TC_CAKE_MAX_TINS];
-	__u32 unresponse_flows [TC_CAKE_MAX_TINS]; /* version 4 */
+	__u16 unresponse_flows [TC_CAKE_MAX_TINS]; /* v4 - was u32 last_len  */
+	__u16 spare            [TC_CAKE_MAX_TINS]; /* v4 - split last_len */
 	__u32 max_skblen       [TC_CAKE_MAX_TINS];
 	__u32 capacity_estimate;  /* version 2 */
 	__u32 memory_limit;       /* version 3 */
