@@ -60,21 +60,23 @@
 #include "codel5_compat.h"
 #endif
 
-static struct cobalt_skb_cb *get_cobalt_cb(const struct sk_buff *skb)
+struct cobalt_skb_cb *get_cobalt_cb(const struct sk_buff *skb)
 {
 	qdisc_cb_private_validate(skb, sizeof(struct cobalt_skb_cb));
 	return (struct cobalt_skb_cb *)qdisc_skb_cb(skb)->data;
 }
 
-static cobalt_time_t cobalt_get_enqueue_time(const struct sk_buff *skb)
+cobalt_time_t cobalt_get_enqueue_time(const struct sk_buff *skb)
 {
 	return get_cobalt_cb(skb)->enqueue_time;
 }
 
-#define REC_INV_SQRT_BITS (8 * sizeof(u32))
-#define REC_INV_SQRT_SHIFT (32 - REC_INV_SQRT_BITS)
-#define REC_INV_SQRT_CACHE (16)
+void cobalt_set_enqueue_time(struct sk_buff *skb, cobalt_time_t now)
+{
+	get_cobalt_cb(skb)->enqueue_time = now;
+}
 
+#define REC_INV_SQRT_CACHE (16)
 static u32 cobalt_rec_inv_sqrt_cache[REC_INV_SQRT_CACHE] = {0};
 
 /*
@@ -85,18 +87,22 @@ static u32 cobalt_rec_inv_sqrt_cache[REC_INV_SQRT_CACHE] = {0};
  */
 static void cobalt_Newton_step(struct cobalt_vars *vars)
 {
-	if (vars->count < REC_INV_SQRT_CACHE &&
-	   likely(cobalt_rec_inv_sqrt_cache[vars->count])) {
+	u32 invsqrt = vars->rec_inv_sqrt;
+	u32 invsqrt2 = ((u64)invsqrt * invsqrt) >> 32;
+	u64 val = (3LL << 32) - ((u64)vars->count * invsqrt2);
+
+	val >>= 2; /* avoid overflow in following multiply */
+	val = (val * invsqrt) >> (32 - 2 + 1);
+
+	vars->rec_inv_sqrt = val;
+}
+
+static void cobalt_invsqrt(struct cobalt_vars *vars)
+{
+	if (vars->count < REC_INV_SQRT_CACHE) {
 		vars->rec_inv_sqrt = cobalt_rec_inv_sqrt_cache[vars->count];
 	} else {
-		u32 invsqrt = ((u32)vars->rec_inv_sqrt) << REC_INV_SQRT_SHIFT;
-		u32 invsqrt2 = ((u64)invsqrt * invsqrt) >> 32;
-		u64 val = (3LL << 32) - ((u64)vars->count * invsqrt2);
-
-		val >>= 2; /* avoid overflow in following multiply */
-		val = (val * invsqrt) >> (32 - 2 + 1);
-
-		vars->rec_inv_sqrt = val >> REC_INV_SQRT_SHIFT;
+		cobalt_Newton_step(vars);
 	}
 }
 
@@ -104,8 +110,8 @@ static void cobalt_cache_init(void)
 {
 	struct cobalt_vars v;
 
-	cobalt_vars_init(&v);
-	v.rec_inv_sqrt = ~0U >> REC_INV_SQRT_SHIFT;
+	memset(&v, 0, sizeof(v));
+	v.rec_inv_sqrt = ~0U;
 	cobalt_rec_inv_sqrt_cache[0] = v.rec_inv_sqrt;
 
 	for (v.count = 1; v.count < REC_INV_SQRT_CACHE; v.count++) {
@@ -122,9 +128,9 @@ void cobalt_vars_init(struct cobalt_vars *vars)
 {
 	memset(vars, 0, sizeof(*vars));
 
-	if(!cobalt_rev_inv_sqrt_cache[0]) {
+	if(!cobalt_rec_inv_sqrt_cache[0]) {
 		cobalt_cache_init();
-		cobalt_rev_inv_sqrt_cache[0] = ~0;
+		cobalt_rec_inv_sqrt_cache[0] = ~0;
 	}
 }
 
@@ -137,14 +143,18 @@ static cobalt_time_t cobalt_control_law(cobalt_time_t t,
 				      cobalt_time_t interval,
 				      u32 rec_inv_sqrt)
 {
-	return t + reciprocal_scale(interval, rec_inv_sqrt <<
-				    REC_INV_SQRT_SHIFT);
+	return t + reciprocal_scale(interval, rec_inv_sqrt);
 }
 
-/* Call this when a packet had to be dropped due to queue overflow. */
-void cobalt_queue_full(struct cobalt_vars *vars, struct cobalt_params *p, cobalt_time_t now)
+/* Call this when a packet had to be dropped due to queue overflow.
+ * Returns true if the BLUE state was quiescent before but active after this call.
+ */
+bool cobalt_queue_full(struct cobalt_vars *vars, struct cobalt_params *p, cobalt_time_t now)
 {
+	bool up = false;
+
 	if((now - vars->blue_timer) > p->target) {
+		up = !vars->p_drop;
 		vars->p_drop += p->p_inc;
 		if(vars->p_drop < p->p_inc)
 			vars->p_drop = ~0;
@@ -154,19 +164,34 @@ void cobalt_queue_full(struct cobalt_vars *vars, struct cobalt_params *p, cobalt
 	vars->drop_next = now;
 	if(!vars->count)
 		vars->count = 1;
+
+	return up;
 }
 
-/* Call this when the queue was serviced but turned out to be empty. */
-void cobalt_queue_empty(struct cobalt_vars *vars, struct cobalt_params *p, cobalt_time_t now)
+/* Call this when the queue was serviced but turned out to be empty.
+ * Returns true if the BLUE state was active before but quiescent after this call.
+ */
+bool cobalt_queue_empty(struct cobalt_vars *vars, struct cobalt_params *p, cobalt_time_t now)
 {
-	if((now - vars->blue_timer) > p->target) {
+	bool down = false;
+
+	if(vars->p_drop && (now - vars->blue_timer) > p->target) {
 		if(vars->p_drop < p->p_dec)
 			vars->p_drop = 0;
 		else
 			vars->p_drop -= p->p_dec;
 		vars->blue_timer = now;
+		down = !vars->p_drop;
 	}
 	vars->dropping = false;
+
+	if(vars->count && (now - vars->drop_next) >= 0) {
+		vars->count--;
+		cobalt_invsqrt(vars);
+		vars->drop_next = cobalt_control_law(vars->drop_next, p->interval, vars->rec_inv_sqrt);
+	}
+
+	return down;
 }
 
 /* Call this with a freshly dequeued packet for possible congestion marking.
@@ -205,12 +230,12 @@ bool cobalt_should_drop(struct cobalt_vars *vars,
 		vars->count++;
 		if(!vars->count)
 			vars->count--;
-		cobalt_Newton_step(vars);
+		cobalt_invsqrt(vars);
 		vars->drop_next = cobalt_control_law(vars->drop_next, p->interval, vars->rec_inv_sqrt);
 	} else {
 		while(next_due) {
 			vars->count--;
-			cobalt_Newton_step(vars);
+			cobalt_invsqrt(vars);
 			vars->drop_next = cobalt_control_law(vars->drop_next, p->interval, vars->rec_inv_sqrt);
 			schedule = now - vars->drop_next;
 			next_due = vars->count && schedule >= 0;

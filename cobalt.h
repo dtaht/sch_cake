@@ -45,12 +45,29 @@
 #include <linux/types.h>
 #include <linux/ktime.h>
 #include <linux/skbuff.h>
+#include <net/pkt_sched.h>
+#include <net/inet_ecn.h>
+#include <linux/reciprocal_div.h>
 
 typedef u64 cobalt_time_t;
 typedef s64 cobalt_tdiff_t;
 
 #define MS2TIME(a) (a * (u64) NSEC_PER_MSEC)
 #define US2TIME(a) (a * (u64) NSEC_PER_USEC)
+
+#define codel_stats_copy_queue(a, b, c, d) gnet_stats_copy_queue(a, b, c, d)
+#define codel_watchdog_schedule_ns(a, b, c) qdisc_watchdog_schedule_ns(a, b, c)
+
+static inline cobalt_time_t cobalt_get_time(void)
+{
+	return ktime_get_ns();
+}
+
+static inline u32 cobalt_time_to_us(cobalt_time_t val)
+{
+	do_div(val, NSEC_PER_USEC);
+	return (u32)val;
+}
 
 struct cobalt_skb_cb {
 	cobalt_time_t enqueue_time;
@@ -67,7 +84,6 @@ struct cobalt_skb_cb {
 struct cobalt_params {
 	cobalt_time_t	interval;
 	cobalt_time_t	target;
-	cobalt_time_t	threshold;
 	u32          	p_inc;
 	u32          	p_dec;
 };
@@ -95,11 +111,14 @@ struct cobalt_vars {
 /* Initialise visible and internal data. */
 void cobalt_vars_init(struct cobalt_vars *vars);
 
+struct cobalt_skb_cb *get_cobalt_cb(const struct sk_buff *skb);
+cobalt_time_t cobalt_get_enqueue_time(const struct sk_buff *skb);
+
 /* Call this when a packet had to be dropped due to queue overflow. */
-void cobalt_queue_full(struct cobalt_vars *vars, struct cobalt_params *p, cobalt_time_t now);
+bool cobalt_queue_full(struct cobalt_vars *vars, struct cobalt_params *p, cobalt_time_t now);
 
 /* Call this when the queue was serviced but turned out to be empty. */
-void cobalt_queue_empty(struct cobalt_vars *vars, struct cobalt_params *p, cobalt_time_t now);
+bool cobalt_queue_empty(struct cobalt_vars *vars, struct cobalt_params *p, cobalt_time_t now);
 
 /* Call this with a freshly dequeued packet for possible congestion marking.
  * Returns true as an instruction to drop the packet, false for delivery.

@@ -13,4 +13,4 @@ install:
 	[ "$(KERNEL_VERSION)" != `uname -r` ] || modprobe sch_cake
 
 clean:
-	rm -rf Module.markers modules.order Module.symvers sch_cake.ko sch_cake.mod.c sch_cake.mod.o sch_cake.o
+	rm -rf Module.markers modules.order Module.symvers sch_cake.ko sch_cake.mod.c sch_cake.mod.o sch_cake.o cobalt.o cobalt.mod.o cobalt.ko
