@@ -215,7 +215,7 @@ bool cobalt_should_drop(struct cobalt_vars *vars,
 	if(over_target) {
 		if(!vars->dropping) {
 			vars->dropping = true;
-			vars->drop_next = cobalt_control_law(vars->drop_next, p->interval, vars->rec_inv_sqrt);
+			vars->drop_next = cobalt_control_law(now, p->interval, vars->rec_inv_sqrt);
 		}
 		if(!vars->count)
 			vars->count = 1;
