@@ -854,7 +854,7 @@ static struct sk_buff *cake_dequeue_one(struct Qdisc *sch)
 static void cake_clear_tin(struct Qdisc *sch, u16 tin)
 {
 	struct cake_sched_data *q = qdisc_priv(sch);
-	struct sk_buff skb;
+	struct sk_buff *skb;
 
 	q->cur_tin = tin;
 	for (q->cur_flow = 0; q->cur_flow < CAKE_QUEUES; q->cur_flow++)
