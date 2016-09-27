@@ -318,7 +318,9 @@ cake_hash(struct cake_tin_data *q, const struct sk_buff *skb, int flow_mode)
 	host_keys.ports.ports     = 0;
 	host_keys.basic.ip_proto  = 0;
 	host_keys.keyid.keyid     = 0;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 8, 0)
 	host_keys.tags.vlan_id    = 0;
+#endif
 	host_keys.tags.flow_label = 0;
 
 	switch (host_keys.control.addr_type) {
@@ -580,7 +582,11 @@ static void cake_heapify_up(struct cake_sched_data *q, u16 i)
 	}
 }
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 8, 0)
 static unsigned int cake_drop(struct Qdisc *sch)
+#else
+static unsigned int cake_drop(struct Qdisc *sch, struct sk_buff **to_free)
+#endif
 {
 	struct cake_sched_data *q = qdisc_priv(sch);
 	struct sk_buff *skb;
@@ -624,7 +630,11 @@ static unsigned int cake_drop(struct Qdisc *sch)
 	b->tin_dropped++;
 	sch->qstats.drops++;
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 8, 0)
 	kfree_skb(skb);
+#else
+	__qdisc_drop(skb, to_free);
+#endif
 	sch->q.qlen--;
 
 	cake_heapify(q,0);
@@ -650,7 +660,11 @@ static inline u32 cake_get_diffserv(struct sk_buff *skb)
 
 static void cake_reconfigure(struct Qdisc *sch);
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 8, 0)
 static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
+#else
+static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch, struct sk_buff **to_free)
+#endif
 {
 	struct cake_sched_data *q = qdisc_priv(sch);
 	u32 idx, tin;
@@ -694,7 +708,11 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 		segs = skb_gso_segment(skb, features & ~NETIF_F_GSO_MASK);
 
 		if (IS_ERR_OR_NULL(segs))
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 8, 0)
 			return qdisc_reshape_fail(skb, sch);
+#else
+			return qdisc_drop(skb, sch, to_free);
+#endif
 
 		while (segs) {
 			nskb = segs->next;
@@ -796,7 +814,11 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 
 		while (q->buffer_used > q->buffer_limit) {
 			dropped++;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 8, 0)
 			cake_drop(sch);
+#else
+			cake_drop(sch, to_free);
+#endif
 		}
 		b->drop_overlimit += dropped;
 	}
@@ -832,11 +854,12 @@ static struct sk_buff *cake_dequeue_one(struct Qdisc *sch)
 static void cake_clear_tin(struct Qdisc *sch, u16 tin)
 {
 	struct cake_sched_data *q = qdisc_priv(sch);
+	struct sk_buff *skb;
 
 	q->cur_tin = tin;
 	for (q->cur_flow = 0; q->cur_flow < CAKE_QUEUES; q->cur_flow++)
-		while (cake_dequeue_one(sch))
-			;
+		while (!!(skb = cake_dequeue_one(sch)))
+			kfree_skb(skb);
 }
 
 static struct sk_buff *cake_dequeue(struct Qdisc *sch)
@@ -859,8 +882,12 @@ begin:
 	/* global hard shaper */
 	if (q->time_next_packet > now) {
 		sch->qstats.overlimits++;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 8, 0)
 		codel_watchdog_schedule_ns(&q->watchdog, q->time_next_packet,
 					   true);
+#else
+		qdisc_watchdog_schedule_ns(&q->watchdog, q->time_next_packet);
+#endif
 		return NULL;
 	}
 
@@ -999,7 +1026,11 @@ retry:
 		/* drop this packet, get another one */
 		b->tin_dropped++;
 		qdisc_tree_reduce_backlog(sch, 1, qdisc_pkt_len(skb));
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 8, 0)
 		qdisc_drop(skb, sch);
+#else
+		__qdisc_drop(skb, NULL);
+#endif
 	}
 
 	b->tin_ecn_mark += !!flow->cvars.ecn_marked;
@@ -1813,7 +1844,9 @@ static struct Qdisc_ops cake_qdisc_ops __read_mostly = {
 	.enqueue	=	cake_enqueue,
 	.dequeue	=	cake_dequeue,
 	.peek		=	qdisc_peek_dequeued,
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 8, 0)
 	.drop		=	cake_drop,
+#endif
 	.init		=	cake_init,
 	.reset		=	cake_reset,
 	.destroy	=	cake_destroy,
