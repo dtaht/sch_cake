@@ -58,6 +58,11 @@
 #endif
 #include "cobalt.c"
 
+#if defined(CONFIG_NF_CONNTRACK) || defined(CONFIG_NF_CONNTRACK_MODULE)
+#include <net/netfilter/nf_conntrack_core.h>
+#include <net/netfilter/nf_conntrack.h>
+#endif
+
 #if (KERNEL_VERSION(4,4,11) > LINUX_VERSION_CODE) || ((KERNEL_VERSION(4,5,0) <= LINUX_VERSION_CODE) && (KERNEL_VERSION(4,5,5) > LINUX_VERSION_CODE))
 #define qdisc_tree_reduce_backlog(_a,_b,_c) qdisc_tree_decrease_qlen(_a,_b)
 #endif
@@ -255,6 +260,7 @@ enum {
 
 enum {
 	CAKE_FLAG_ATM = 0x0001,
+	CAKE_FLAG_PTM = 0x0002,
 	CAKE_FLAG_AUTORATE_INGRESS = 0x0010,
 };
 
@@ -267,8 +273,71 @@ enum {
 	CAKE_FLOW_DUAL_SRC, /* = CAKE_FLOW_SRC_IP | CAKE_FLOW_FLOWS */
 	CAKE_FLOW_DUAL_DST, /* = CAKE_FLOW_DST_IP | CAKE_FLOW_FLOWS */
 	CAKE_FLOW_TRIPLE,   /* = CAKE_FLOW_HOSTS  | CAKE_FLOW_FLOWS */
-	CAKE_FLOW_MAX
+	CAKE_FLOW_MAX,
+	CAKE_FLOW_NAT_FLAG = 64
 };
+
+#if defined(CONFIG_NF_CONNTRACK) || defined(CONFIG_NF_CONNTRACK_MODULE)
+static inline void cake_update_flowkeys(struct flow_keys *keys, const struct sk_buff *skb)
+{
+	enum ip_conntrack_info ctinfo;
+	bool reverse = false;
+
+	struct nf_conn *ct;
+	const struct nf_conntrack_tuple *tuple;
+
+	if (tc_skb_protocol(skb) != htons(ETH_P_IP))
+		return;
+
+	ct = nf_ct_get(skb, &ctinfo);
+	if (ct != NULL) {
+		tuple = nf_ct_tuple(ct, CTINFO2DIR(ctinfo));
+	} else {
+		const struct nf_conntrack_tuple_hash *hash;
+		struct nf_conntrack_tuple srctuple;
+
+		if (! nf_ct_get_tuplepr(skb, skb_network_offset(skb),
+					NFPROTO_IPV4, dev_net(skb->dev), &srctuple))
+			return;
+
+		hash = nf_conntrack_find_get(dev_net(skb->dev),
+				&nf_ct_zone_dflt, &srctuple);
+		if (hash == NULL)
+			return;
+
+		reverse = true;
+		ct = nf_ct_tuplehash_to_ctrack(hash);
+		tuple = nf_ct_tuple(ct, !hash->tuple.dst.dir);
+	}
+
+#if KERNEL_VERSION(4, 2, 0) > LINUX_VERSION_CODE
+	keys->src = ( reverse ? tuple->dst.u3.ip : tuple->src.u3.ip );
+	keys->dst = ( reverse ? tuple->src.u3.ip : tuple->dst.u3.ip );
+#else
+	keys->addrs.v4addrs.src = ( reverse ? tuple->dst.u3.ip : tuple->src.u3.ip );
+	keys->addrs.v4addrs.dst = ( reverse ? tuple->src.u3.ip : tuple->dst.u3.ip );
+#endif
+
+	if (keys->ports.ports) {
+#if KERNEL_VERSION(4, 2, 0) > LINUX_VERSION_CODE
+		keys->port16[0] = ( reverse ? tuple->dst.u.all : tuple->src.u.all );
+		keys->port16[1] = ( reverse ? tuple->src.u.all : tuple->dst.u.all );
+#else
+		keys->ports.src = ( reverse ? tuple->dst.u.all : tuple->src.u.all );
+		keys->ports.dst = ( reverse ? tuple->src.u.all : tuple->dst.u.all );
+#endif
+	}
+	if (reverse)
+		nf_ct_put(ct);
+	return;
+}
+#else
+static inline void cake_update_flowkeys(struct flow_keys *keys, const sk_buff *skb)
+{
+	/* There is nothing we can do here without CONNTRACK */
+	return;
+}
+#endif
 
 static inline u32
 cake_hash(struct cake_tin_data *q, const struct sk_buff *skb, int flow_mode)
@@ -286,6 +355,9 @@ cake_hash(struct cake_tin_data *q, const struct sk_buff *skb, int flow_mode)
 
 #if KERNEL_VERSION(4, 2, 0) > LINUX_VERSION_CODE
 	skb_flow_dissect(skb, &keys);
+
+	if(flow_mode & CAKE_FLOW_NAT_FLAG)
+		cake_update_flowkeys(&keys, skb);
 
 	srchost_hash = jhash_1word(
 		(__force u32) keys.src, q->perturbation);
@@ -310,6 +382,10 @@ cake_hash(struct cake_tin_data *q, const struct sk_buff *skb, int flow_mode)
 	skb_flow_dissect_flow_keys(skb, &keys,
 				FLOW_DISSECTOR_F_STOP_AT_FLOW_LABEL);
 #endif
+
+	if(flow_mode & CAKE_FLOW_NAT_FLAG)
+		cake_update_flowkeys(&keys, skb);
+
 	/* flow_hash_from_keys() sorts the addresses by value, so we have
 	 * to preserve their order in a separate data structure to treat
 	 * src and dst host addresses as independently selectable.
@@ -494,6 +570,13 @@ static inline u32 cake_overhead(struct cake_sched_data *q, u32 in)
 		out += 47;
 		out /= 48;
 		out *= 53;
+	} else if(q->rate_flags & CAKE_FLAG_PTM) {
+		// the actual overhead is 1 bit per 64-bit block
+		// the following adds one byte per 64 bytes or part thereof
+		// and rounds up to 64-bit blocks
+		// this is conservative and easier to calculate
+		out = (out & ~7) + 8 * !!(out & 7);
+		out += (out / 64) + !!(out % 64);
 	}
 
 	return out;
@@ -1491,14 +1574,17 @@ static int cake_change(struct Qdisc *sch, struct nlattr *opt)
 		q->tin_mode = nla_get_u32(tb[TCA_CAKE_DIFFSERV_MODE]);
 
 	if (tb[TCA_CAKE_ATM]) {
-		if (!!nla_get_u32(tb[TCA_CAKE_ATM]))
-			q->rate_flags |= CAKE_FLAG_ATM;
-		else
-			q->rate_flags &= ~CAKE_FLAG_ATM;
+		q->rate_flags &= ~(CAKE_FLAG_ATM | CAKE_FLAG_PTM);
+		q->rate_flags |= nla_get_u32(tb[TCA_CAKE_ATM]) & (CAKE_FLAG_ATM | CAKE_FLAG_PTM);
 	}
 
 	if (tb[TCA_CAKE_FLOW_MODE])
 		q->flow_mode = nla_get_u32(tb[TCA_CAKE_FLOW_MODE]);
+
+	if (tb[TCA_CAKE_NAT]) {
+		q->flow_mode &= ~CAKE_FLOW_NAT_FLAG;
+		q->flow_mode |= CAKE_FLOW_NAT_FLAG * !!nla_get_u32(tb[TCA_CAKE_NAT]);
+	}
 
 	if (tb[TCA_CAKE_OVERHEAD])
 		q->rate_overhead = nla_get_s32(tb[TCA_CAKE_OVERHEAD]);
