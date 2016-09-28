@@ -571,11 +571,8 @@ static inline u32 cake_overhead(struct cake_sched_data *q, u32 in)
 		out /= 48;
 		out *= 53;
 	} else if(q->rate_flags & CAKE_FLAG_PTM) {
-		// the actual overhead is 1 bit per 64-bit block
 		// the following adds one byte per 64 bytes or part thereof
-		// and rounds up to 64-bit blocks
-		// this is conservative and easier to calculate
-		out = (out & ~7) + 8 * !!(out & 7);
+		// this is conservative and easier to calculate than the precise value
 		out += (out / 64) + !!(out % 64);
 	}
 
