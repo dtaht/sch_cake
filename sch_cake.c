@@ -1415,11 +1415,11 @@ static void cake_config_diffserv4(struct Qdisc *sch)
 	}
 
 	/* class characteristics */
-	cake_set_rate(&q->tins[0], rate, mtu,
+	cake_set_rate(&q->tins[0], rate >> 4, mtu,
 		      US2TIME(q->target), US2TIME(q->interval));
-	cake_set_rate(&q->tins[1], rate - (rate >> 4), mtu,
+	cake_set_rate(&q->tins[1], rate, mtu,
 		      US2TIME(q->target), US2TIME(q->interval));
-	cake_set_rate(&q->tins[2], rate - (rate >> 2), mtu,
+	cake_set_rate(&q->tins[2], rate >> 1, mtu,
 		      US2TIME(q->target), US2TIME(q->interval));
 	cake_set_rate(&q->tins[3], rate >> 2, mtu,
 		      US2TIME(q->target), US2TIME(q->interval));
@@ -1431,10 +1431,10 @@ static void cake_config_diffserv4(struct Qdisc *sch)
 	q->tins[3].tin_quantum_prio = quantum << 4;
 
 	/* bandwidth-sharing weights */
-	q->tins[0].tin_quantum_band = (quantum >> 4);
-	q->tins[1].tin_quantum_band = (quantum >> 3) + (quantum >> 4);
-	q->tins[2].tin_quantum_band = (quantum >> 1);
-	q->tins[3].tin_quantum_band = (quantum >> 2);
+	q->tins[0].tin_quantum_band = quantum >> 4;
+	q->tins[1].tin_quantum_band = quantum;
+	q->tins[2].tin_quantum_band = quantum >> 1;
+	q->tins[3].tin_quantum_band = quantum >> 2;
 }
 
 static void cake_config_diffserv_llt(struct Qdisc *sch)
