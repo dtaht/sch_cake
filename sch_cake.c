@@ -1533,10 +1533,8 @@ static void cake_reconfigure(struct Qdisc *sch)
 		q->buffer_limit = q->buffer_config_limit;
 	} else if (q->rate_bps) {
 		u64 t = (u64) q->rate_bps * q->interval;
-
 		do_div(t, USEC_PER_SEC / 4);
-		q->buffer_limit = max_t(u32, t, 65536U);
-
+		q->buffer_limit = max_t(u32, t, 4U << 20);
 	} else {
 		q->buffer_limit = ~0;
 	}
