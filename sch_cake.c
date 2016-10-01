@@ -1201,7 +1201,7 @@ static void cake_set_rate(struct cake_tin_data *b, u64 rate, u32 mtu,
 	b->cparams.p_dec = 1 << 20; /* 1/4096 */
 }
 
-static void cake_config_besteffort(struct Qdisc *sch)
+static int cake_config_besteffort(struct Qdisc *sch)
 {
 	struct cake_sched_data *q = qdisc_priv(sch);
 	struct cake_tin_data *b = &q->tins[0];
@@ -1217,9 +1217,11 @@ static void cake_config_besteffort(struct Qdisc *sch)
 	cake_set_rate(b, rate, mtu, US2TIME(q->target), US2TIME(q->interval));
 	b->tin_quantum_band = 65535;
 	b->tin_quantum_prio = 65535;
+
+	return 0;
 }
 
-static void cake_config_precedence(struct Qdisc *sch)
+static int cake_config_precedence(struct Qdisc *sch)
 {
 	/* convert high-level (user visible) parameters into internal format */
 	struct cake_sched_data *q = qdisc_priv(sch);
@@ -1253,6 +1255,8 @@ static void cake_config_precedence(struct Qdisc *sch)
 		quantum2  *= 7;
 		quantum2 >>= 3;
 	}
+
+	return 0;
 }
 
 /*	List of known Diffserv codepoints:
@@ -1299,7 +1303,7 @@ static void cake_config_precedence(struct Qdisc *sch)
  *	Total 12 traffic classes.
  */
 
-static void cake_config_diffserv8(struct Qdisc *sch)
+static int cake_config_diffserv8(struct Qdisc *sch)
 {
 /*	Pruned list of traffic classes for typical applications:
  *
@@ -1368,9 +1372,11 @@ static void cake_config_diffserv8(struct Qdisc *sch)
 		quantum2  *= 7;
 		quantum2 >>= 3;
 	}
+
+	return 0;
 }
 
-static void cake_config_diffserv4(struct Qdisc *sch)
+static int cake_config_diffserv4(struct Qdisc *sch)
 {
 /*  Further pruned list of traffic classes for four-class system:
  *
@@ -1435,9 +1441,12 @@ static void cake_config_diffserv4(struct Qdisc *sch)
 	q->tins[1].tin_quantum_band = quantum;
 	q->tins[2].tin_quantum_band = quantum >> 1;
 	q->tins[3].tin_quantum_band = quantum >> 2;
+
+	/* tin 0 is not 100% rate, but tin 1 is */
+	return 1;
 }
 
-static void cake_config_diffserv_llt(struct Qdisc *sch)
+static int cake_config_diffserv_llt(struct Qdisc *sch)
 {
 /*  Diffserv structure specialised for Latency-Loss-Tradeoff spec.
  *		Loss Sensitive		(TOS1, TOS2)
@@ -1492,33 +1501,35 @@ static void cake_config_diffserv_llt(struct Qdisc *sch)
 	q->tins[2].tin_quantum_band = 2048;
 	q->tins[3].tin_quantum_band = 256;
 	q->tins[4].tin_quantum_band = 16;
+
+	return 0;
 }
 
 static void cake_reconfigure(struct Qdisc *sch)
 {
 	struct cake_sched_data *q = qdisc_priv(sch);
-	int c;
+	int c, ft;
 
 	switch (q->tin_mode) {
 	case CAKE_MODE_BESTEFFORT:
 	default:
-		cake_config_besteffort(sch);
+		ft = cake_config_besteffort(sch);
 		break;
 
 	case CAKE_MODE_PRECEDENCE:
-		cake_config_precedence(sch);
+		ft = cake_config_precedence(sch);
 		break;
 
 	case CAKE_MODE_DIFFSERV8:
-		cake_config_diffserv8(sch);
+		ft = cake_config_diffserv8(sch);
 		break;
 
 	case CAKE_MODE_DIFFSERV4:
-		cake_config_diffserv4(sch);
+		ft = cake_config_diffserv4(sch);
 		break;
 
 	case CAKE_MODE_LLT:
-		cake_config_diffserv_llt(sch);
+		ft = cake_config_diffserv_llt(sch);
 		break;
 	};
 
@@ -1526,8 +1537,8 @@ static void cake_reconfigure(struct Qdisc *sch)
 	for (c = q->tin_cnt; c < CAKE_MAX_TINS; c++)
 		cake_clear_tin(sch, c);
 
-	q->rate_ns   = q->tins[0].tin_rate_ns;
-	q->rate_shft = q->tins[0].tin_rate_shft;
+	q->rate_ns   = q->tins[ft].tin_rate_ns;
+	q->rate_shft = q->tins[ft].tin_rate_shft;
 
 	if (q->buffer_config_limit) {
 		q->buffer_limit = q->buffer_config_limit;
