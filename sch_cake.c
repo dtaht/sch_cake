@@ -1656,7 +1656,7 @@ static int cake_init(struct Qdisc *sch, struct nlattr *opt)
 {
 	struct cake_sched_data *q = qdisc_priv(sch);
 	int i, j;
-	static const host_quantum = 4096;
+	static const u16 host_quantum = 4096;
 
 	/* codel_cache_init(); */
 	sch->limit = 10240;
