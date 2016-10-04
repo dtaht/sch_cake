@@ -164,7 +164,6 @@ struct cake_tin_data {
 	struct cake_host hosts[CAKE_QUEUES]; /* for triple isolation */
 	u32	perturbation;
 	u16	flow_quantum;
-	u16	host_quantum;
 
 	struct cobalt_params cparams;
 	u32	drop_overlimit;
@@ -276,6 +275,8 @@ enum {
 	CAKE_FLOW_MAX,
 	CAKE_FLOW_NAT_FLAG = 64
 };
+
+static u16 quantum_div[CAKE_QUEUES+1] = {0};
 
 #if defined(CONFIG_NF_CONNTRACK) || defined(CONFIG_NF_CONNTRACK_MODULE)
 static inline void cake_update_flowkeys(struct flow_keys *keys, const struct sk_buff *skb)
@@ -948,12 +949,12 @@ static struct sk_buff *cake_dequeue(struct Qdisc *sch)
 	struct sk_buff *skb;
 	struct cake_tin_data *b = &q->tins[q->cur_tin];
 	struct cake_flow *flow;
+	struct cake_host *srchost, *dsthost;
 	struct list_head *head;
-	u16 deferred_hosts;
-	u32 len;
+	u32 len, deferred_hosts;
 	cobalt_time_t now = ktime_get_ns();
 	cobalt_time_t delay;
-	bool src_blocked = false, dst_blocked = false, first_flow = true;
+	bool host_blocked = false, first_flow = true;
 
 begin:
 	if (!sch->q.qlen)
@@ -993,19 +994,6 @@ begin:
 
 retry:
 	/* service this class */
-	if(deferred_hosts >= b->sparse_flow_count + b->bulk_flow_count) {
-		/* looks like all hosts are exhausted; refresh them */
-		u32 j;
-
-		for(j=0; j < CAKE_QUEUES; j++) {
-			if(b->hosts[j].srchost_deficit < 0)
-				b->hosts[j].srchost_deficit += b->host_quantum;
-			if(b->hosts[j].dsthost_deficit < 0)
-				b->hosts[j].dsthost_deficit += b->host_quantum;
-		}
-		deferred_hosts = 0;
-	}
-
 	head = &b->decaying_flows;
 	if (!first_flow || list_empty(head)) {
 		head = &b->new_flows;
@@ -1021,15 +1009,27 @@ retry:
 	flow = list_first_entry(head, struct cake_flow, flowchain);
 	q->cur_flow = flow - b->flows;
 	first_flow = false;
+	host_blocked = false;
 
 	/* triple isolation (modified dual DRR) */
-	src_blocked = (q->flow_mode & CAKE_FLOW_DUAL_SRC) == CAKE_FLOW_DUAL_SRC &&
-			b->hosts[flow->srchost].srchost_deficit < 0;
+	srchost = &(b->hosts[flow->srchost]);
+	dsthost = &(b->hosts[flow->dsthost]);
 
-	dst_blocked = (q->flow_mode & CAKE_FLOW_DUAL_DST) == CAKE_FLOW_DUAL_DST &&
-			b->hosts[flow->dsthost].dsthost_deficit < 0;
+	if((q->flow_mode & CAKE_FLOW_DUAL_SRC) == CAKE_FLOW_DUAL_SRC &&
+			srchost->srchost_deficit < 0)
+	{
+		host_blocked = true;
+		srchost->srchost_deficit += quantum_div[srchost->srchost_refcnt];
+	}
 
-	if (src_blocked || dst_blocked) {
+	if((q->flow_mode & CAKE_FLOW_DUAL_DST) == CAKE_FLOW_DUAL_DST &&
+			dsthost->dsthost_deficit < 0)
+	{
+		host_blocked = true;
+		dsthost->dsthost_deficit += quantum_div[dsthost->dsthost_refcnt];
+	}
+
+	if (host_blocked) {
 		/* this host is exhausted, so defer the flow */
 		list_move_tail(&flow->flowchain, head);
 		deferred_hosts++;
@@ -1093,8 +1093,8 @@ retry:
 					b->bulk_flow_count--;
 				else
 					b->decaying_flow_count--;
-				b->hosts[flow->srchost].srchost_refcnt--;
-				b->hosts[flow->dsthost].dsthost_refcnt--;
+				srchost->srchost_refcnt--;
+				dsthost->dsthost_refcnt--;
 			}
 			goto begin;
 		}
@@ -1119,8 +1119,8 @@ retry:
 	len = cake_overhead(q, qdisc_pkt_len(skb));
 	flow->deficit -= len;
 	b->tin_deficit -= len;
-	b->hosts[flow->srchost].srchost_deficit -= len;
-	b->hosts[flow->dsthost].dsthost_deficit -= len;
+	srchost->srchost_deficit -= len;
+	dsthost->dsthost_deficit -= len;
 
 	/* collect delay stats */
 	delay = now - cobalt_get_enqueue_time(skb);
@@ -1175,7 +1175,6 @@ static void cake_set_rate(struct cake_tin_data *b, u64 rate, u32 mtu,
 	u32 byte_target = mtu + (mtu >> 1);
 
 	b->flow_quantum = 1514;
-	b->host_quantum = 4096;
 	if (rate) {
 		b->flow_quantum = max(min(rate >> 12, 1514ULL), 300ULL);
 		rate_shft = 32;
@@ -1657,6 +1656,7 @@ static int cake_init(struct Qdisc *sch, struct nlattr *opt)
 {
 	struct cake_sched_data *q = qdisc_priv(sch);
 	int i, j;
+	static const host_quantum = 4096;
 
 	/* codel_cache_init(); */
 	sch->limit = 10240;
@@ -1681,6 +1681,9 @@ static int cake_init(struct Qdisc *sch, struct nlattr *opt)
 	}
 
 	qdisc_watchdog_init(&q->watchdog, sch);
+
+	for(i=1; i <= CAKE_QUEUES; i++)
+		quantum_div[i] = host_quantum / i;
 
 	q->tins = cake_zalloc(CAKE_MAX_TINS * sizeof(struct cake_tin_data));
 	if (!q->tins)
