@@ -278,7 +278,7 @@ enum {
 
 static u16 quantum_div[CAKE_QUEUES+1] = {0};
 
-#if defined(CONFIG_NF_CONNTRACK) || defined(CONFIG_NF_CONNTRACK_MODULE)
+#if (defined(CONFIG_NF_CONNTRACK) || defined(CONFIG_NF_CONNTRACK_MODULE)) && LINUX_VERSION_CODE >= KERNEL_VERSION(4,4,0)
 static inline void cake_update_flowkeys(struct flow_keys *keys, const struct sk_buff *skb)
 {
 	enum ip_conntrack_info ctinfo;
@@ -592,9 +592,6 @@ static inline void cake_heap_swap(struct cake_sched_data *q, u16 i, u16 j)
 {
 	struct cake_heap_entry ii = q->overflow_heap[i];
 	struct cake_heap_entry jj = q->overflow_heap[j];
-
-	BUG_ON(q->tins[ii.t].overflow_idx[ii.b] != i);
-	BUG_ON(q->tins[jj.t].overflow_idx[jj.b] != j);
 
 	q->overflow_heap[i] = jj;
 	q->overflow_heap[j] = ii;
@@ -1682,6 +1679,7 @@ static int cake_init(struct Qdisc *sch, struct nlattr *opt)
 
 	qdisc_watchdog_init(&q->watchdog, sch);
 
+	quantum_div[0] = 1;
 	for(i=1; i <= CAKE_QUEUES; i++)
 		quantum_div[i] = host_quantum / i;
 
