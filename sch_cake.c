@@ -444,7 +444,7 @@ cake_hash(struct cake_tin_data *q, const struct sk_buff *skb, int flow_mode)
 
 	/* set-associative hashing */
 	/* fast path if no hash collision (direct lookup succeeds) */
-	if (likely(q->tags[reduced_hash] == flow_hash)) {
+	if (likely(q->tags[reduced_hash] == flow_hash && q->flows[reduced_hash].set)) {
 		q->way_directs++;
 	} else {
 		u32 inner_hash = reduced_hash % CAKE_SET_WAYS;
@@ -460,6 +460,13 @@ cake_hash(struct cake_tin_data *q, const struct sk_buff *skb, int flow_mode)
 		     i++, k = (k + 1) % CAKE_SET_WAYS) {
 			if (q->tags[outer_hash + k] == flow_hash) {
 				q->way_hits++;
+
+				if(!q->flows[outer_hash + k].set) {
+					/* need to increment host refcnts */
+					need_allocate_src = true;
+					need_allocate_dst = true;
+				}
+
 				goto found;
 			}
 		}
@@ -1015,6 +1022,7 @@ retry:
 	if((q->flow_mode & CAKE_FLOW_DUAL_SRC) == CAKE_FLOW_DUAL_SRC &&
 			srchost->srchost_deficit < 0)
 	{
+		WARN_ON(srchost->srchost_refcnt > CAKE_QUEUES);
 		host_blocked = true;
 		srchost->srchost_deficit += quantum_div[srchost->srchost_refcnt];
 	}
@@ -1022,6 +1030,7 @@ retry:
 	if((q->flow_mode & CAKE_FLOW_DUAL_DST) == CAKE_FLOW_DUAL_DST &&
 			dsthost->dsthost_deficit < 0)
 	{
+		WARN_ON(dsthost->dsthost_refcnt > CAKE_QUEUES);
 		host_blocked = true;
 		dsthost->dsthost_deficit += quantum_div[dsthost->dsthost_refcnt];
 	}
@@ -1069,7 +1078,7 @@ retry:
 			if(cobalt_queue_empty(&flow->cvars, &b->cparams, now))
 				b->unresponsive_flow_count--;
 
-			if (flow->cvars.p_drop || flow->cvars.count) {
+			if (flow->cvars.p_drop || flow->cvars.count || (now - flow->cvars.drop_next) < 0) {
 				/* keep in the flowchain until the state has decayed to rest */
 				list_move_tail(&flow->flowchain, &b->decaying_flows);
 				flow->set = CAKE_SET_DECAYING;
