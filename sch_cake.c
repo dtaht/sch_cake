@@ -306,8 +306,13 @@ static inline void cake_update_flowkeys(struct flow_keys *keys, const struct sk_
 #endif
 			return;
 
+#if KERNEL_VERSION(4, 3, 0) > LINUX_VERSION_CODE
+		hash = nf_conntrack_find_get(dev_net(skb->dev),
+				NF_CT_DEFAULT_ZONE, &srctuple);
+#else
 		hash = nf_conntrack_find_get(dev_net(skb->dev),
 				&nf_ct_zone_dflt, &srctuple);
+#endif
 		if (hash == NULL)
 			return;
 
