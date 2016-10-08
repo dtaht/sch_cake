@@ -318,15 +318,17 @@ static inline void cake_update_flowkeys(struct flow_keys *keys, const struct sk_
 	keys->addrs.v4addrs.dst = ( reverse ? tuple->src.u3.ip : tuple->dst.u3.ip );
 #endif
 
-	if (keys->ports.ports) {
 #if KERNEL_VERSION(4, 2, 0) > LINUX_VERSION_CODE
+	if (keys->ports) {
 		keys->port16[0] = ( reverse ? tuple->dst.u.all : tuple->src.u.all );
 		keys->port16[1] = ( reverse ? tuple->src.u.all : tuple->dst.u.all );
+	}
 #else
+	if (keys->ports.ports) {
 		keys->ports.src = ( reverse ? tuple->dst.u.all : tuple->src.u.all );
 		keys->ports.dst = ( reverse ? tuple->src.u.all : tuple->dst.u.all );
-#endif
 	}
+#endif
 	if (reverse)
 		nf_ct_put(ct);
 	return;
