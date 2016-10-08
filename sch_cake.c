@@ -297,8 +297,13 @@ static inline void cake_update_flowkeys(struct flow_keys *keys, const struct sk_
 		const struct nf_conntrack_tuple_hash *hash;
 		struct nf_conntrack_tuple srctuple;
 
+#if KERNEL_VERSION(4, 4, 0) > LINUX_VERSION_CODE
+		if (! nf_ct_get_tuplepr(skb, skb_network_offset(skb),
+					NFPROTO_IPV4, &srctuple))
+#else
 		if (! nf_ct_get_tuplepr(skb, skb_network_offset(skb),
 					NFPROTO_IPV4, dev_net(skb->dev), &srctuple))
+#endif
 			return;
 
 		hash = nf_conntrack_find_get(dev_net(skb->dev),
