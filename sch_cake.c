@@ -51,6 +51,7 @@
 #include <net/netlink.h>
 #include <linux/version.h>
 #include "pkt_sched.h"
+#include <linux/if_vlan.h>
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 2, 0)
 #include <net/flow_keys.h>
 #else
@@ -279,6 +280,12 @@ enum {
 };
 
 #if defined(CONFIG_NF_CONNTRACK) || defined(CONFIG_NF_CONNTRACK_MODULE)
+
+#if KERNEL_VERSION(4, 0, 0) > LINUX_VERSION_CODE
+#define tc_skb_protocol(_skb) \
+(vlan_tx_tag_present(_skb) ? _skb->vlan_proto : _skb->protocol)
+#endif
+
 static inline void cake_update_flowkeys(struct flow_keys *keys, const struct sk_buff *skb)
 {
 	enum ip_conntrack_info ctinfo;
