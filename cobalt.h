@@ -58,6 +58,10 @@ typedef s64 cobalt_tdiff_t;
 #define codel_stats_copy_queue(a, b, c, d) gnet_stats_copy_queue(a, b, c, d)
 #define codel_watchdog_schedule_ns(a, b, c) qdisc_watchdog_schedule_ns(a, b, c)
 
+#if KERNEL_VERSION(3, 18, 0) > LINUX_VERSION_CODE
+#include "codel5_compat.h"
+#endif
+
 static inline cobalt_time_t cobalt_get_time(void)
 {
 	return ktime_get_ns();
