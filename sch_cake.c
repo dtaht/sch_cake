@@ -333,7 +333,7 @@ static inline void cake_update_flowkeys(struct flow_keys *keys, const struct sk_
 	return;
 }
 #else
-static inline void cake_update_flowkeys(struct flow_keys *keys, const sk_buff *skb)
+static inline void cake_update_flowkeys(struct flow_keys *keys, const struct sk_buff *skb)
 {
 	/* There is nothing we can do here without CONNTRACK */
 	return;
@@ -955,10 +955,10 @@ static struct sk_buff *cake_dequeue(struct Qdisc *sch)
 	struct cake_flow *flow;
 	struct cake_host *srchost, *dsthost;
 	struct list_head *head;
-	u32 len, deferred_hosts;
+	u32 len, host_load;
 	cobalt_time_t now = ktime_get_ns();
 	cobalt_time_t delay;
-	bool host_blocked = false, first_flow = true;
+	bool first_flow = true;
 
 begin:
 	if (!sch->q.qlen)
@@ -994,14 +994,12 @@ begin:
 		}
 	}
 
-	deferred_hosts = 0;
-
 retry:
 	/* service this class */
 	head = &b->decaying_flows;
 	if (!first_flow || list_empty(head)) {
 		head = &b->new_flows;
-		if (list_empty(head) || deferred_hosts >= b->sparse_flow_count) {
+		if (list_empty(head)) {
 			head = &b->old_flows;
 			if (unlikely(list_empty(head))) {
 				head = &b->decaying_flows;
@@ -1013,38 +1011,23 @@ retry:
 	flow = list_first_entry(head, struct cake_flow, flowchain);
 	q->cur_flow = flow - b->flows;
 	first_flow = false;
-	host_blocked = false;
 
-	/* triple isolation (modified dual DRR) */
+	/* triple isolation (modified DRR++) */
 	srchost = &(b->hosts[flow->srchost]);
 	dsthost = &(b->hosts[flow->dsthost]);
+	host_load = 1;
 
-	if((q->flow_mode & CAKE_FLOW_DUAL_SRC) == CAKE_FLOW_DUAL_SRC &&
-			srchost->srchost_deficit < 0)
-	{
-		WARN_ON(srchost->srchost_refcnt > CAKE_QUEUES);
-		host_blocked = true;
-		srchost->srchost_deficit += quantum_div[srchost->srchost_refcnt];
-	}
+	if((q->flow_mode & CAKE_FLOW_DUAL_SRC) == CAKE_FLOW_DUAL_SRC)
+		host_load = max(host_load, srchost->srchost_refcnt);
 
-	if((q->flow_mode & CAKE_FLOW_DUAL_DST) == CAKE_FLOW_DUAL_DST &&
-			dsthost->dsthost_deficit < 0)
-	{
-		WARN_ON(dsthost->dsthost_refcnt > CAKE_QUEUES);
-		host_blocked = true;
-		dsthost->dsthost_deficit += quantum_div[dsthost->dsthost_refcnt];
-	}
+	if((q->flow_mode & CAKE_FLOW_DUAL_DST) == CAKE_FLOW_DUAL_DST)
+		host_load = max(host_load, dsthost->dsthost_refcnt);
 
-	if (host_blocked) {
-		/* this host is exhausted, so defer the flow */
-		list_move_tail(&flow->flowchain, head);
-		deferred_hosts++;
-		goto retry;
-	}
+	WARN_ON(host_load > CAKE_QUEUES);
 
 	/* flow isolation (DRR++) */
 	if (flow->deficit <= 0) {
-		flow->deficit += b->flow_quantum;
+		flow->deficit += (b->flow_quantum * quantum_div[host_load] + (prandom_u32() >> 16)) >> 16;
 		if(flow->head) {
 			list_move_tail(&flow->flowchain, &b->old_flows);
 			flow->set = CAKE_SET_BULK;
@@ -1066,7 +1049,6 @@ retry:
 				b->decaying_flow_count++;
 			}
 		}
-		deferred_hosts = 0;
 		goto retry;
 	}
 
@@ -1115,7 +1097,8 @@ retry:
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 8, 0)
 		qdisc_drop(skb, sch);
 #else
-		__qdisc_drop(skb, NULL);
+		qdisc_qstats_drop(sch);
+		kfree_skb(skb);
 #endif
 	}
 
@@ -1662,7 +1645,6 @@ static int cake_init(struct Qdisc *sch, struct nlattr *opt)
 {
 	struct cake_sched_data *q = qdisc_priv(sch);
 	int i, j;
-	static const u16 host_quantum = 4096;
 
 	/* codel_cache_init(); */
 	sch->limit = 10240;
@@ -1688,9 +1670,9 @@ static int cake_init(struct Qdisc *sch, struct nlattr *opt)
 
 	qdisc_watchdog_init(&q->watchdog, sch);
 
-	quantum_div[0] = 1;
+	quantum_div[0] = ~0;
 	for(i=1; i <= CAKE_QUEUES; i++)
-		quantum_div[i] = host_quantum / i;
+		quantum_div[i] = 65535 / i;
 
 	q->tins = cake_zalloc(CAKE_MAX_TINS * sizeof(struct cake_tin_data));
 	if (!q->tins)
