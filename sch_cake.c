@@ -278,11 +278,6 @@ enum {
 
 static u16 quantum_div[CAKE_QUEUES+1] = {0};
 
-static inline u32 max(u32 a, u32 b)
-{
-	return a>b ? a : b;
-}
-
 #if (defined(CONFIG_NF_CONNTRACK) || defined(CONFIG_NF_CONNTRACK_MODULE)) && LINUX_VERSION_CODE >= KERNEL_VERSION(4,4,0)
 static inline void cake_update_flowkeys(struct flow_keys *keys, const struct sk_buff *skb)
 {
@@ -960,7 +955,8 @@ static struct sk_buff *cake_dequeue(struct Qdisc *sch)
 	struct cake_flow *flow;
 	struct cake_host *srchost, *dsthost;
 	struct list_head *head;
-	u32 len, host_load;
+	u32 len;
+	u16 host_load;
 	cobalt_time_t now = ktime_get_ns();
 	cobalt_time_t delay;
 	bool first_flow = true;
