@@ -333,7 +333,7 @@ static inline void cake_update_flowkeys(struct flow_keys *keys, const struct sk_
 	return;
 }
 #else
-static inline void cake_update_flowkeys(struct flow_keys *keys, const sk_buff *skb)
+static inline void cake_update_flowkeys(struct flow_keys *keys, const struct sk_buff *skb)
 {
 	/* There is nothing we can do here without CONNTRACK */
 	return;
@@ -1115,7 +1115,8 @@ retry:
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 8, 0)
 		qdisc_drop(skb, sch);
 #else
-		__qdisc_drop(skb, NULL);
+		qdisc_qstats_drop(sch);
+		kfree_skb(skb);
 #endif
 	}
 
