@@ -261,6 +261,7 @@ enum {
 	CAKE_FLAG_ATM = 0x0001,
 	CAKE_FLAG_PTM = 0x0002,
 	CAKE_FLAG_AUTORATE_INGRESS = 0x0010,
+	CAKE_FLAG_WASH = 0x0100
 };
 
 enum {
@@ -727,15 +728,36 @@ static unsigned int cake_drop(struct Qdisc *sch, struct sk_buff **to_free)
 	return idx + (tin << 16);
 }
 
-
-static inline u32 cake_get_diffserv(struct sk_buff *skb)
+static inline void cake_wash_diffserv(struct sk_buff *skb)
 {
 	switch (skb->protocol) {
 	case htons(ETH_P_IP):
-		return ipv4_get_dsfield(ip_hdr(skb)) >> 2;
+		ipv4_change_dsfield(ip_hdr(skb), INET_ECN_MASK, 0);
+		break;
+	case htons(ETH_P_IPV6):
+		ipv6_change_dsfield(ipv6_hdr(skb), INET_ECN_MASK, 0);
+		break;
+	default:
+		break;
+	};
+}
+
+static inline u8 cake_handle_diffserv(struct sk_buff *skb, u16 wash)
+{
+	u8 dscp;
+
+	switch (skb->protocol) {
+	case htons(ETH_P_IP):
+		dscp = ipv4_get_dsfield(ip_hdr(skb)) >> 2;
+		if (wash && dscp)
+			ipv4_change_dsfield(ip_hdr(skb), INET_ECN_MASK, 0);
+		return dscp;
 
 	case htons(ETH_P_IPV6):
-		return ipv6_get_dsfield(ipv6_hdr(skb)) >> 2;
+		dscp = ipv6_get_dsfield(ipv6_hdr(skb)) >> 2;
+		if (wash && dscp)
+			ipv6_change_dsfield(ipv6_hdr(skb), INET_ECN_MASK, 0);
+		return dscp;
 
 	default:
 		/* If there is no Diffserv field, treat as bulk */
@@ -759,9 +781,17 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch, struct sk_buff *
 	u64 now = cobalt_get_time();
 
 	/* extract the Diffserv Precedence field, if it exists */
-	tin = q->tin_index[cake_get_diffserv(skb)];
-	if (unlikely(tin >= q->tin_cnt))
+	/* and clear DSCP bits if washing */
+	if (q->tin_mode != CAKE_MODE_BESTEFFORT) {
+		tin = q->tin_index[cake_handle_diffserv(skb,
+				q->rate_flags & CAKE_FLAG_WASH)];
+		if (unlikely(tin >= q->tin_cnt))
+			tin = 0;
+	} else {
 		tin = 0;
+		if (q->rate_flags & CAKE_FLAG_WASH)
+			cake_wash_diffserv(skb);
+	}
 
 	b = &q->tins[tin];
 
@@ -1151,6 +1181,7 @@ static const struct nla_policy cake_policy[TCA_CAKE_MAX + 1] = {
 	[TCA_CAKE_RTT]           = { .type = NLA_U32 },
 	[TCA_CAKE_TARGET]        = { .type = NLA_U32 },
 	[TCA_CAKE_MEMORY]        = { .type = NLA_U32 },
+	[TCA_CAKE_WASH]          = { .type = NLA_U32 },
 };
 
 static void cake_set_rate(struct cake_tin_data *b, u64 rate, u32 mtu,
@@ -1574,6 +1605,13 @@ static int cake_change(struct Qdisc *sch, struct nlattr *opt)
 		q->rate_flags |= nla_get_u32(tb[TCA_CAKE_ATM]) & (CAKE_FLAG_ATM | CAKE_FLAG_PTM);
 	}
 
+	if (tb[TCA_CAKE_WASH]) {
+		if (!!nla_get_u32(tb[TCA_CAKE_WASH]))
+			q->rate_flags |= CAKE_FLAG_WASH;
+		else
+			q->rate_flags &= ~CAKE_FLAG_WASH;
+	}
+
 	if (tb[TCA_CAKE_FLOW_MODE])
 		q->flow_mode = nla_get_u32(tb[TCA_CAKE_FLOW_MODE]);
 
@@ -1733,6 +1771,10 @@ static int cake_dump(struct Qdisc *sch, struct sk_buff *skb)
 		goto nla_put_failure;
 
 	if (nla_put_u32(skb, TCA_CAKE_FLOW_MODE, q->flow_mode))
+		goto nla_put_failure;
+
+	if (nla_put_u32(skb, TCA_CAKE_WASH,
+			!!(q->rate_flags & CAKE_FLAG_WASH)))
 		goto nla_put_failure;
 
 	if (nla_put_u32(skb, TCA_CAKE_OVERHEAD, q->rate_overhead))
