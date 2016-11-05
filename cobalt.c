@@ -246,5 +246,9 @@ bool cobalt_should_drop(struct cobalt_vars *vars,
 	if(vars->p_drop)
 		drop |= (prandom_u32() < vars->p_drop);
 
+	/* Overload the drop_next field as an activity timeout */
+	if(!vars->count)
+		vars->drop_next = now + p->interval;
+
 	return drop;
 }
