@@ -1582,8 +1582,13 @@ static int cake_change(struct Qdisc *sch, struct nlattr *opt)
 		q->flow_mode |= CAKE_FLOW_NAT_FLAG * !!nla_get_u32(tb[TCA_CAKE_NAT]);
 	}
 
-	if (tb[TCA_CAKE_OVERHEAD])
-		q->rate_overhead = nla_get_s32(tb[TCA_CAKE_OVERHEAD]) - qdisc_dev(sch)->hard_header_len;
+	if (tb[TCA_CAKE_OVERHEAD]) {
+		if (tb[TCA_CAKE_ETHERNET])
+			q->rate_overhead = -(nla_get_s32(tb[TCA_CAKE_ETHERNET]));
+		else
+			q->rate_overhead = -(qdisc_dev(sch)->hard_header_len);
+		q->rate_overhead += nla_get_s32(tb[TCA_CAKE_OVERHEAD]);
+	}
 
 	if (tb[TCA_CAKE_RTT]) {
 		q->interval = nla_get_u32(tb[TCA_CAKE_RTT]);
