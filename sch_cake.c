@@ -1620,8 +1620,13 @@ static int cake_change(struct Qdisc *sch, struct nlattr *opt)
 		q->flow_mode |= CAKE_FLOW_NAT_FLAG * !!nla_get_u32(tb[TCA_CAKE_NAT]);
 	}
 
-	if (tb[TCA_CAKE_OVERHEAD])
-		q->rate_overhead = nla_get_s32(tb[TCA_CAKE_OVERHEAD]);
+	if (tb[TCA_CAKE_OVERHEAD]) {
+		if (tb[TCA_CAKE_ETHERNET])
+			q->rate_overhead = -(nla_get_s32(tb[TCA_CAKE_ETHERNET]));
+		else
+			q->rate_overhead = -(qdisc_dev(sch)->hard_header_len);
+		q->rate_overhead += nla_get_s32(tb[TCA_CAKE_OVERHEAD]);
+	}
 
 	if (tb[TCA_CAKE_RTT]) {
 		q->interval = nla_get_u32(tb[TCA_CAKE_RTT]);
@@ -1777,7 +1782,10 @@ static int cake_dump(struct Qdisc *sch, struct sk_buff *skb)
 			!!(q->rate_flags & CAKE_FLAG_WASH)))
 		goto nla_put_failure;
 
-	if (nla_put_u32(skb, TCA_CAKE_OVERHEAD, q->rate_overhead))
+	if (nla_put_u32(skb, TCA_CAKE_OVERHEAD, q->rate_overhead + qdisc_dev(sch)->hard_header_len))
+		goto nla_put_failure;
+
+	if (nla_put_u32(skb, TCA_CAKE_ETHERNET, qdisc_dev(sch)->hard_header_len))
 		goto nla_put_failure;
 
 	if (nla_put_u32(skb, TCA_CAKE_RTT, q->interval))
