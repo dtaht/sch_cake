@@ -127,6 +127,7 @@ static char *cake_version __attribute__((used)) = "Cake version: "
 enum {
 	CAKE_SET_NONE = 0,
 	CAKE_SET_SPARSE,
+	CAKE_SET_SPARSE_WAIT, // counted in SPARSE, actually in BULK
 	CAKE_SET_BULK,
 	CAKE_SET_DECAYING
 };
@@ -880,6 +881,10 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch, struct sk_buff *
 
 	/* flowchain */
 	if (!flow->set || flow->set == CAKE_SET_DECAYING) {
+		struct cake_host *srchost = &(b->hosts[flow->srchost]);
+		struct cake_host *dsthost = &(b->hosts[flow->dsthost]);
+		u16 host_load = 1;
+
 		if(!flow->set) {
 			list_add_tail(&flow->flowchain, &b->new_flows);
 		} else {
@@ -888,7 +893,19 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch, struct sk_buff *
 		}
 		flow->set = CAKE_SET_SPARSE;
 		b->sparse_flow_count++;
-		flow->deficit = b->flow_quantum;
+
+		if((q->flow_mode & CAKE_FLOW_DUAL_SRC) == CAKE_FLOW_DUAL_SRC)
+			host_load = max(host_load, srchost->srchost_refcnt);
+
+		if((q->flow_mode & CAKE_FLOW_DUAL_DST) == CAKE_FLOW_DUAL_DST)
+			host_load = max(host_load, dsthost->dsthost_refcnt);
+
+		flow->deficit = (b->flow_quantum * quantum_div[host_load]) >> 16;
+	} else if(flow->set == CAKE_SET_SPARSE_WAIT) {
+		/* this flow is empty, accounted as a sparse flow, but actually in the bulk rotation */
+		flow->set = CAKE_SET_BULK;
+		b->sparse_flow_count--;
+		b->bulk_flow_count++;
 	}
 
 	if (q->buffer_used > q->buffer_max_used)
@@ -1029,26 +1046,19 @@ retry:
 	/* flow isolation (DRR++) */
 	if (flow->deficit <= 0) {
 		flow->deficit += (b->flow_quantum * quantum_div[host_load] + (prandom_u32() >> 16)) >> 16;
+		list_move_tail(&flow->flowchain, &b->old_flows);
 
-		if(flow->head) {
-			list_move_tail(&flow->flowchain, &b->old_flows);
-			flow->set = CAKE_SET_BULK;
-			if (head == &b->new_flows) {
+		// here we keep all flows with deficits out of the sparse and decaying rotations
+		// no non-empty flow can go into the decaying rotation, so they can't get deficits
+		if (flow->set == CAKE_SET_SPARSE) {
+			if (flow->head) {
 				b->sparse_flow_count--;
 				b->bulk_flow_count++;
-			} else if(head == &b->decaying_flows) {
-				b->decaying_flow_count--;
-				b->bulk_flow_count++;
-			}
-		} else {
-			list_move_tail(&flow->flowchain, &b->decaying_flows);
-			flow->set = CAKE_SET_DECAYING;
-			if (head == &b->new_flows) {
-				b->sparse_flow_count--;
-				b->decaying_flow_count++;
-			} else if(head == &b->old_flows) {
-				b->bulk_flow_count--;
-				b->decaying_flow_count++;
+				flow->set = CAKE_SET_BULK;
+			} else {
+				// we've moved it to the bulk rotation for correct deficit accounting
+				// but we still want to count it as a sparse flow, not a bulk one
+				flow->set = CAKE_SET_SPARSE_WAIT;
 			}
 		}
 		goto retry;
@@ -1065,24 +1075,25 @@ retry:
 			if (flow->cvars.p_drop || flow->cvars.count || (now - flow->cvars.drop_next) < 0) {
 				/* keep in the flowchain until the state has decayed to rest */
 				list_move_tail(&flow->flowchain, &b->decaying_flows);
-				flow->set = CAKE_SET_DECAYING;
-				if (head == &b->new_flows) {
-					b->sparse_flow_count--;
-					b->decaying_flow_count++;
-				} else if(head == &b->old_flows) {
+				if(flow->set == CAKE_SET_BULK) {
 					b->bulk_flow_count--;
 					b->decaying_flow_count++;
+				} else if (flow->set == CAKE_SET_SPARSE || flow->set == CAKE_SET_SPARSE_WAIT) {
+					b->sparse_flow_count--;
+					b->decaying_flow_count++;
 				}
+				flow->set = CAKE_SET_DECAYING;
 			} else {
 				/* remove empty queue from the flowchain */
 				list_del_init(&flow->flowchain);
-				flow->set = CAKE_SET_NONE;
-				if (head == &b->new_flows)
+				if (flow->set == CAKE_SET_SPARSE || flow->set == CAKE_SET_SPARSE_WAIT)
 					b->sparse_flow_count--;
-				else if(head == &b->old_flows)
+				else if(flow->set == CAKE_SET_BULK)
 					b->bulk_flow_count--;
 				else
 					b->decaying_flow_count--;
+
+				flow->set = CAKE_SET_NONE;
 				srchost->srchost_refcnt--;
 				dsthost->dsthost_refcnt--;
 			}
