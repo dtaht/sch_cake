@@ -460,7 +460,8 @@ cake_hash(struct cake_tin_data *q, const struct sk_buff *skb, int flow_mode)
 		for (i = 0, k = inner_hash; i < CAKE_SET_WAYS;
 		     i++, k = (k + 1) % CAKE_SET_WAYS) {
 			if (q->tags[outer_hash + k] == flow_hash) {
-				q->way_hits++;
+				if(i)
+					q->way_hits++;
 
 				if(!q->flows[outer_hash + k].set) {
 					/* need to increment host refcnts */
@@ -739,7 +740,7 @@ static inline u32 cake_get_diffserv(struct sk_buff *skb)
 		return ipv6_get_dsfield(ipv6_hdr(skb)) >> 2;
 
 	default:
-		/* If there is no Diffserv field, treat as bulk */
+		/* If there is no Diffserv field, treat as best-effort */
 		return 0;
 	};
 }
