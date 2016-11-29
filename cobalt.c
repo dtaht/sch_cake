@@ -250,7 +250,7 @@ bool cobalt_should_drop(struct cobalt_vars *vars,
 	/* Overload the drop_next field as an activity timeout */
 	if(!vars->count)
 		vars->drop_next = now + p->interval;
-	else if(schedule > 0)
+	else if(schedule > 0 && !drop)
 		vars->drop_next = now;
 
 	return drop;
