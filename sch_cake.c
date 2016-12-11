@@ -1129,7 +1129,9 @@ retry:
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 8, 0)
 		qdisc_drop(skb, sch);
 #else
-		__qdisc_drop(skb, NULL);
+		//__qdisc_drop(skb, NULL);
+		kfree_skb(skb);
+		qdisc_qstats_drop(sch);
 #endif
 	}
 
