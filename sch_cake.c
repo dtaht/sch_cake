@@ -1459,6 +1459,7 @@ static int cake_config_diffserv3(struct Qdisc *sch)
 	struct cake_sched_data *q = qdisc_priv(sch);
 	u64 rate = q->rate_bps;
 	u32 mtu = psched_mtu(qdisc_dev(sch));
+	u32 quantum = 1024;
 	u32 i;
 
 	q->tin_cnt = 3;
