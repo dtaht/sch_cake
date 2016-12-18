@@ -255,6 +255,7 @@ enum {
 	CAKE_MODE_DIFFSERV8,
 	CAKE_MODE_DIFFSERV4,
 	CAKE_MODE_LLT,
+	CAKE_MODE_DIFFSERV3,
 	CAKE_MODE_MAX
 };
 
@@ -1448,6 +1449,55 @@ static int cake_config_diffserv4(struct Qdisc *sch)
 	return 1;
 }
 
+static int cake_config_diffserv3(struct Qdisc *sch)
+{
+/*  Simplified Diffserv structure with 3 tins.
+ *		Low Priority		(CS1)
+ *		Best Effort
+ *		Latency Sensitive	(TOS4, VA, EF, CS6, CS7)
+ */
+	struct cake_sched_data *q = qdisc_priv(sch);
+	u64 rate = q->rate_bps;
+	u32 mtu = psched_mtu(qdisc_dev(sch));
+	u32 quantum = 1024;
+	u32 i;
+
+	q->tin_cnt = 3;
+
+	/* codepoint to class mapping */
+	for (i = 0; i < 64; i++)
+		q->tin_index[i] = 1;	/* default to best-effort */
+
+	q->tin_index[0x08] = 0;	/* CS1 */
+
+	q->tin_index[0x04] = 2;	/* TOS4 */
+	q->tin_index[0x2c] = 2;	/* VA */
+	q->tin_index[0x2e] = 2;	/* EF */
+	q->tin_index[0x30] = 2;	/* CS6 */
+	q->tin_index[0x38] = 2;	/* CS7 */
+
+	/* class characteristics */
+	cake_set_rate(&q->tins[0], rate >> 4, mtu,
+		      US2TIME(q->target), US2TIME(q->interval));
+	cake_set_rate(&q->tins[1], rate, mtu,
+		      US2TIME(q->target), US2TIME(q->interval));
+	cake_set_rate(&q->tins[2], rate >> 2, mtu,
+		      US2TIME(q->target), US2TIME(q->target));
+
+	/* priority weights */
+	q->tins[0].tin_quantum_prio = quantum >> 4;
+	q->tins[1].tin_quantum_prio = quantum;
+	q->tins[2].tin_quantum_prio = quantum << 4;
+
+	/* bandwidth-sharing weights */
+	q->tins[0].tin_quantum_band = quantum >> 4;
+	q->tins[1].tin_quantum_band = quantum;
+	q->tins[2].tin_quantum_band = quantum >> 2;
+
+	/* tin 0 is not 100% rate, but tin 1 is */
+	return 1;
+}
+
 static int cake_config_diffserv_llt(struct Qdisc *sch)
 {
 /*  Diffserv structure specialised for Latency-Loss-Tradeoff spec.
@@ -1532,6 +1582,10 @@ static void cake_reconfigure(struct Qdisc *sch)
 
 	case CAKE_MODE_LLT:
 		ft = cake_config_diffserv_llt(sch);
+		break;
+
+	case CAKE_MODE_DIFFSERV3:
+		ft = cake_config_diffserv3(sch);
 		break;
 	};
 
@@ -1667,8 +1721,8 @@ static int cake_init(struct Qdisc *sch, struct nlattr *opt)
 
 	/* codel_cache_init(); */
 	sch->limit = 10240;
-	q->tin_mode = CAKE_MODE_DIFFSERV4;
-	q->flow_mode  = CAKE_FLOW_FLOWS;
+	q->tin_mode = CAKE_MODE_DIFFSERV3;
+	q->flow_mode  = CAKE_FLOW_TRIPLE;
 
 	q->rate_bps = 0; /* unlimited by default */
 
