@@ -1618,7 +1618,6 @@ static void cake_reconfigure(struct Qdisc *sch)
 
 	switch (q->tin_mode) {
 	case CAKE_MODE_BESTEFFORT:
-	default:
 		ft = cake_config_besteffort(sch);
 		break;
 
@@ -1639,6 +1638,7 @@ static void cake_reconfigure(struct Qdisc *sch)
 		break;
 
 	case CAKE_MODE_DIFFSERV3:
+	default:
 		ft = cake_config_diffserv3(sch);
 		break;
 	};
