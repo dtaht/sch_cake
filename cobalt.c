@@ -232,6 +232,7 @@ bool cobalt_should_drop(struct cobalt_vars *vars,
 			vars->count--;
 		cobalt_invsqrt(vars);
 		vars->drop_next = cobalt_control_law(vars->drop_next, p->interval, vars->rec_inv_sqrt);
+		schedule = now - vars->drop_next;
 	} else {
 		while(next_due) {
 			vars->count--;
@@ -245,6 +246,12 @@ bool cobalt_should_drop(struct cobalt_vars *vars,
 	/* Simple BLUE implementation.  Lack of ECN is deliberate. */
 	if(vars->p_drop)
 		drop |= (prandom_u32() < vars->p_drop);
+
+	/* Overload the drop_next field as an activity timeout */
+	if(!vars->count)
+		vars->drop_next = now + p->interval;
+	else if(schedule > 0 && !drop)
+		vars->drop_next = now;
 
 	return drop;
 }
