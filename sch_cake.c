@@ -740,6 +740,9 @@ static inline u32 cake_get_diffserv(struct sk_buff *skb)
 	case htons(ETH_P_IPV6):
 		return ipv6_get_dsfield(ipv6_hdr(skb)) >> 2;
 
+	case htons(ETH_P_ARP):
+		return 0x38;  // CS7 - Net Control
+
 	default:
 		/* If there is no Diffserv field, treat as best-effort */
 		return 0;
