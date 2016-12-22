@@ -158,6 +158,29 @@ void diffserv4() {
 	print_dscp("diffserv4",dscp);
 }
 
+/*  Simplified Diffserv structure with 3 tins.
+ *		Low Priority		(CS1)
+ *		Best Effort
+ *		Latency Sensitive	(TOS4, VA, EF, CS6, CS7)
+ */
+
+void diffserv3() {
+	uint8_t dscp[64];
+	/* codepoint to class mapping */
+	for (int i = 0; i < 64; i++)
+		dscp[i] = 1;	/* default to best-effort */
+
+	dscp[0x08] = 0;	/* CS1 */
+
+	dscp[0x04] = 2;	/* TOS4 */
+	dscp[0x2c] = 2;	/* VA */
+	dscp[0x2e] = 2;	/* EF */
+	dscp[0x30] = 2;	/* CS6 */
+	dscp[0x38] = 2;	/* CS7 */
+
+	print_dscp("diffserv3",dscp);
+}
+
 void besteffort() {
 	uint8_t dscp[64];
 	for (int i = 0; i < 64; i++)
@@ -169,5 +192,6 @@ int main(int argc, char **argv) {
 	precedence();
 	diffserv8();
 	diffserv4();
+	diffserv3();
 	besteffort();
 }
