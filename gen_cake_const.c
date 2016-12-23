@@ -60,10 +60,10 @@ static int min(int a, int b) {
 static void print_dscp(char *var, uint8_t *dscp) {
 	printf("static const u8 %s[] = {", var);
 	for(int i=0;i<64;i+=8) {
-		for(int j=0; j<8; j++) {
+		for(int j=0; j<7; j++) {
 			printf("%d, ",(int)dscp[i+j]);
 		}
-		printf("\n\t\t\t\t");
+		printf("%d,\n\t\t\t\t", dscp[i+7]);
 	}
 	printf("};\n");
 }
@@ -117,6 +117,35 @@ void diffserv8() {
 	}
 
 	print_dscp("diffserv8",dscp);
+}
+
+/*  Diffserv structure specialised for Latency-Loss-Tradeoff spec.
+ *		Loss Sensitive		(TOS1, TOS2)
+ *		Best Effort
+ *		Latency Sensitive	(TOS4, TOS5, VA, EF)
+ *		Low Priority		(CS1)
+ *		Network Control		(CS6, CS7)
+ */
+
+void diffserv_llt() {
+	uint8_t dscp[64];
+	/* codepoint to class mapping */
+
+	for (int i = 0; i < 64; i++)
+		dscp[i] = 1;	/* default to best-effort */
+
+	dscp[0x01] = 0;	/* TOS1 */
+	dscp[0x02] = 0;	/* TOS2 */
+	dscp[0x04] = 2;	/* TOS4 */
+	dscp[0x05] = 2;	/* TOS5 */
+	dscp[0x2c] = 2;	/* VA */
+	dscp[0x2e] = 2;	/* EF */
+	dscp[0x08] = 3;	/* CS1 */
+	dscp[0x30] = 4;	/* CS6 */
+	dscp[0x38] = 4;	/* CS7 */
+
+	print_dscp("diffserv_llt",dscp);
+
 }
 
 /*  Further pruned list of traffic classes for four-class system:
@@ -190,6 +219,7 @@ void besteffort() {
 
 int main(int argc, char **argv) {
 	precedence();
+	diffserv_llt();
 	diffserv8();
 	diffserv4();
 	diffserv3();
