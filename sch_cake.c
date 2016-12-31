@@ -226,6 +226,7 @@ struct cake_sched_data {
 	u32		rate_bps;
 	u16		rate_flags;
 	s16		rate_overhead;
+	u16		rate_mpu;
 	u32		interval;
 	u32		target;
 
@@ -596,6 +597,10 @@ flow_queue_add(struct cake_flow *flow, struct sk_buff *skb)
 static inline u32 cake_overhead(struct cake_sched_data *q, u32 in)
 {
 	u32 out = in + q->rate_overhead;
+
+	if (q->rate_mpu && out < q->rate_mpu) {
+		out = q->rate_mpu;
+	}
 
 	if (q->rate_flags & CAKE_FLAG_ATM) {
 		out += 47;
@@ -1184,6 +1189,7 @@ static const struct nla_policy cake_policy[TCA_CAKE_MAX + 1] = {
 	[TCA_CAKE_ATM]           = { .type = NLA_U32 },
 	[TCA_CAKE_FLOW_MODE]     = { .type = NLA_U32 },
 	[TCA_CAKE_OVERHEAD]      = { .type = NLA_S32 },
+	[TCA_CAKE_MPU]           = { .type = NLA_U32 },
 	[TCA_CAKE_RTT]           = { .type = NLA_U32 },
 	[TCA_CAKE_TARGET]        = { .type = NLA_U32 },
 	[TCA_CAKE_MEMORY]        = { .type = NLA_U32 },
@@ -1679,6 +1685,10 @@ static int cake_change(struct Qdisc *sch, struct nlattr *opt)
 		q->rate_overhead += nla_get_s32(tb[TCA_CAKE_OVERHEAD]);
 	}
 
+	if (tb[TCA_CAKE_MPU]) {
+		q->rate_mpu = nla_get_u32(tb[TCA_CAKE_MPU]);
+	}
+
 	if (tb[TCA_CAKE_RTT]) {
 		q->interval = nla_get_u32(tb[TCA_CAKE_RTT]);
 
@@ -1830,6 +1840,9 @@ static int cake_dump(struct Qdisc *sch, struct sk_buff *skb)
 		goto nla_put_failure;
 
 	if (nla_put_u32(skb, TCA_CAKE_OVERHEAD, q->rate_overhead + qdisc_dev(sch)->hard_header_len))
+		goto nla_put_failure;
+
+	if (nla_put_u32(skb, TCA_CAKE_MPU, q->rate_mpu))
 		goto nla_put_failure;
 
 	if (nla_put_u32(skb, TCA_CAKE_ETHERNET, qdisc_dev(sch)->hard_header_len))
