@@ -51,6 +51,7 @@
 #include <net/netlink.h>
 #include <linux/version.h>
 #include "pkt_sched.h"
+#include <linux/if_vlan.h>
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 2, 0)
 #include <net/flow_keys.h>
 #else
@@ -60,6 +61,7 @@
 
 #if defined(CONFIG_NF_CONNTRACK) || defined(CONFIG_NF_CONNTRACK_MODULE)
 #include <net/netfilter/nf_conntrack_core.h>
+#include <net/netfilter/nf_conntrack_zones.h>
 #include <net/netfilter/nf_conntrack.h>
 #endif
 
@@ -280,7 +282,13 @@ enum {
 
 static u16 quantum_div[CAKE_QUEUES+1] = {0};
 
-#if (defined(CONFIG_NF_CONNTRACK) || defined(CONFIG_NF_CONNTRACK_MODULE)) && LINUX_VERSION_CODE >= KERNEL_VERSION(4,4,0)
+#if defined(CONFIG_NF_CONNTRACK) || defined(CONFIG_NF_CONNTRACK_MODULE)
+
+#if KERNEL_VERSION(4, 0, 0) > LINUX_VERSION_CODE
+#define tc_skb_protocol(_skb) \
+(vlan_tx_tag_present(_skb) ? _skb->vlan_proto : _skb->protocol)
+#endif
+
 static inline void cake_update_flowkeys(struct flow_keys *keys, const struct sk_buff *skb)
 {
 	enum ip_conntrack_info ctinfo;
@@ -299,12 +307,22 @@ static inline void cake_update_flowkeys(struct flow_keys *keys, const struct sk_
 		const struct nf_conntrack_tuple_hash *hash;
 		struct nf_conntrack_tuple srctuple;
 
+#if KERNEL_VERSION(4, 4, 0) > LINUX_VERSION_CODE
+		if (! nf_ct_get_tuplepr(skb, skb_network_offset(skb),
+					NFPROTO_IPV4, &srctuple))
+#else
 		if (! nf_ct_get_tuplepr(skb, skb_network_offset(skb),
 					NFPROTO_IPV4, dev_net(skb->dev), &srctuple))
+#endif
 			return;
 
+#if KERNEL_VERSION(4, 3, 0) > LINUX_VERSION_CODE
+		hash = nf_conntrack_find_get(dev_net(skb->dev),
+				NF_CT_DEFAULT_ZONE, &srctuple);
+#else
 		hash = nf_conntrack_find_get(dev_net(skb->dev),
 				&nf_ct_zone_dflt, &srctuple);
+#endif
 		if (hash == NULL)
 			return;
 
@@ -321,15 +339,17 @@ static inline void cake_update_flowkeys(struct flow_keys *keys, const struct sk_
 	keys->addrs.v4addrs.dst = ( reverse ? tuple->src.u3.ip : tuple->dst.u3.ip );
 #endif
 
-	if (keys->ports.ports) {
 #if KERNEL_VERSION(4, 2, 0) > LINUX_VERSION_CODE
+	if (keys->ports) {
 		keys->port16[0] = ( reverse ? tuple->dst.u.all : tuple->src.u.all );
 		keys->port16[1] = ( reverse ? tuple->src.u.all : tuple->dst.u.all );
+	}
 #else
+	if (keys->ports.ports) {
 		keys->ports.src = ( reverse ? tuple->dst.u.all : tuple->src.u.all );
 		keys->ports.dst = ( reverse ? tuple->src.u.all : tuple->dst.u.all );
-#endif
 	}
+#endif
 	if (reverse)
 		nf_ct_put(ct);
 	return;
@@ -739,6 +759,9 @@ static inline u32 cake_get_diffserv(struct sk_buff *skb)
 
 	case htons(ETH_P_IPV6):
 		return ipv6_get_dsfield(ipv6_hdr(skb)) >> 2;
+
+	case htons(ETH_P_ARP):
+		return 0x38;  // CS7 - Net Control
 
 	default:
 		/* If there is no Diffserv field, treat as best-effort */
