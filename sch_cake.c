@@ -1,7 +1,11 @@
 /*
  * COMMON Applications Kept Enhanced (CAKE) discipline - version 3
  *
- * Copyright (C) 2014-2015 Jonathan Morton <chromatix99@gmail.com>
+ * Copyright (C) 2014-2017 Jonathan Morton <chromatix99@gmail.com>
+ * Copyright (C) 2015-2017 Toke Høiland-Jørgensen <toke@toke.dk>
+ * Copyright (C) 2014-2017 Dave Täht <dave+github@taht.net>
+ * Copyright (C) 2015-2017 Sebastian Moeller <moeller0@gmx.de>
+ * Copyright (C) 2015-2017 Kevin Darbyshire-Bryant <kevin@darbyshire-bryant.me.uk>
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
