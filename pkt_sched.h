@@ -884,7 +884,7 @@ struct tc_cake_xstats {
 	__u8  tin_cnt;  /* <= TC_CAKE_MAX_TINS */
 
 	__u32 threshold_rate   [TC_CAKE_MAX_TINS];
-	__u32 target_us        [TC_CAKE_MAX_TINS];
+	__u32 target_us	       [TC_CAKE_MAX_TINS];
 	struct tc_cake_traffic_stats sent      [TC_CAKE_MAX_TINS];
 	struct tc_cake_traffic_stats dropped   [TC_CAKE_MAX_TINS];
 	struct tc_cake_traffic_stats ecn_marked[TC_CAKE_MAX_TINS];
@@ -899,11 +899,11 @@ struct tc_cake_xstats {
 	__u16 sparse_flows     [TC_CAKE_MAX_TINS];
 	__u16 bulk_flows       [TC_CAKE_MAX_TINS];
 	__u16 unresponse_flows [TC_CAKE_MAX_TINS]; /* v4 - was u32 last_len  */
-	__u16 spare            [TC_CAKE_MAX_TINS]; /* v4 - split last_len */
+	__u16 spare	       [TC_CAKE_MAX_TINS]; /* v4 - split last_len */
 	__u32 max_skblen       [TC_CAKE_MAX_TINS];
 	__u32 capacity_estimate;  /* version 2 */
 	__u32 memory_limit;       /* version 3 */
-	__u32 memory_used;        /* version 3 */
+	__u32 memory_used;	  /* version 3 */
 };
 
 #endif

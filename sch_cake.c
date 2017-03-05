@@ -940,7 +940,7 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch, struct sk_buff *
 			segs = nskb;
 		}
 
-		b->bytes            += slen;
+		b->bytes	    += slen;
 		b->backlogs[idx]    += slen;
 		b->tin_backlog      += slen;
 		sch->qstats.backlog += slen;
@@ -956,7 +956,7 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch, struct sk_buff *
 		/* stats */
 		sch->q.qlen++;
 		b->packets++;
-		b->bytes            += len;
+		b->bytes	    += len;
 		b->backlogs[idx]    += len;
 		b->tin_backlog      += len;
 		sch->qstats.backlog += len;
@@ -1067,9 +1067,9 @@ static struct sk_buff *cake_dequeue_one(struct Qdisc *sch)
 		skb = dequeue_head(flow);
 		len = qdisc_pkt_len(skb);
 		b->backlogs[q->cur_flow] -= len;
-		b->tin_backlog           -= len;
+		b->tin_backlog		 -= len;
 		sch->qstats.backlog      -= len;
-		q->buffer_used           -= skb->truesize;
+		q->buffer_used		 -= skb->truesize;
 		sch->q.qlen--;
 
 		if(q->overflow_timeout)
@@ -1282,17 +1282,17 @@ static void cake_reset(struct Qdisc *sch)
 static const struct nla_policy cake_policy[TCA_CAKE_MAX + 1] = {
 	[TCA_CAKE_BASE_RATE]     = { .type = NLA_U32 },
 	[TCA_CAKE_DIFFSERV_MODE] = { .type = NLA_U32 },
-	[TCA_CAKE_ATM]           = { .type = NLA_U32 },
+	[TCA_CAKE_ATM]		 = { .type = NLA_U32 },
 	[TCA_CAKE_FLOW_MODE]     = { .type = NLA_U32 },
 	[TCA_CAKE_OVERHEAD]      = { .type = NLA_S32 },
-	[TCA_CAKE_RTT]           = { .type = NLA_U32 },
-	[TCA_CAKE_TARGET]        = { .type = NLA_U32 },
+	[TCA_CAKE_RTT]		 = { .type = NLA_U32 },
+	[TCA_CAKE_TARGET]	 = { .type = NLA_U32 },
 	[TCA_CAKE_AUTORATE]      = { .type = NLA_U32 },
-	[TCA_CAKE_MEMORY]        = { .type = NLA_U32 },
-	[TCA_CAKE_NAT]           = { .type = NLA_U32 },
+	[TCA_CAKE_MEMORY]	 = { .type = NLA_U32 },
+	[TCA_CAKE_NAT]		 = { .type = NLA_U32 },
 	[TCA_CAKE_ETHERNET]      = { .type = NLA_U32 },
-	[TCA_CAKE_WASH]          = { .type = NLA_U32 },
-	[TCA_CAKE_MPU]           = { .type = NLA_U32 },
+	[TCA_CAKE_WASH]		 = { .type = NLA_U32 },
+	[TCA_CAKE_MPU]		 = { .type = NLA_U32 },
 };
 
 static void cake_set_rate(struct cake_tin_data *b, u64 rate, u32 mtu,
@@ -1586,7 +1586,7 @@ static int cake_config_diffserv_llt(struct Qdisc *sch)
 	q->tin_cnt = 5;
 
 	/* codepoint to class mapping */
-        q->tin_index = diffserv_llt;
+	q->tin_index = diffserv_llt;
 
 	/* class characteristics */
 	cake_set_rate(&q->tins[0], rate, mtu,
@@ -1934,7 +1934,7 @@ static int cake_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 
 		/* TODO FIXME: add missing aspects of these composite stats */
 		st->sent[i].packets       = b->packets;
-		st->sent[i].bytes         = b->bytes;
+		st->sent[i].bytes	  = b->bytes;
 		st->dropped[i].packets    = b->tin_dropped;
 		st->ecn_marked[i].packets = b->tin_ecn_mark;
 		st->backlog[i].bytes      = b->tin_backlog;
@@ -1944,14 +1944,14 @@ static int cake_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 		st->base_delay_us[i] = cobalt_time_to_us(b->base_delay);
 
 		st->way_indirect_hits[i] = b->way_hits;
-		st->way_misses[i]        = b->way_misses;
+		st->way_misses[i]	 = b->way_misses;
 		st->way_collisions[i]    = b->way_collisions;
 
 		st->sparse_flows[i]      = b->sparse_flow_count + b->decaying_flow_count;
-		st->bulk_flows[i]        = b->bulk_flow_count;
+		st->bulk_flows[i]	 = b->bulk_flow_count;
 		st->unresponse_flows[i]  = b->unresponsive_flow_count;
-		st->spare[i]             = 0;
-		st->max_skblen[i]        = b->max_skblen;
+		st->spare[i]		 = 0;
+		st->max_skblen[i]	 = b->max_skblen;
 	}
 	st->capacity_estimate = q->avg_peak_bandwidth;
 	st->memory_limit      = q->buffer_limit;
