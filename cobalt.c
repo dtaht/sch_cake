@@ -56,10 +56,6 @@
  * more effective on unresponsive flows.
  */
 
-#if KERNEL_VERSION(3, 18, 0) > LINUX_VERSION_CODE
-#include "codel5_compat.h"
-#endif
-
 struct cobalt_skb_cb *get_cobalt_cb(const struct sk_buff *skb)
 {
 	qdisc_cb_private_validate(skb, sizeof(struct cobalt_skb_cb));
