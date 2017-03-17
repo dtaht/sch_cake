@@ -1277,18 +1277,24 @@ retry:
 	b->base_delay = cake_ewma(b->base_delay, delay,
 				     delay < b->base_delay ? 2 : 8);
 
-	/* charge packet bandwidth to this tin, and
-	 * to the global shaper.
+	/* charge packet bandwidth to this tin, lower tins,
+	 * and to the global shaper.
 	 */
-	{
+	if(q->rate_ns) {
 		s64 tdiff1 = b->tin_time_next_packet - now;
 		s64 tdiff2 = (len * (u64)b->tin_rate_ns) >> b->tin_rate_shft;
+		s64 tdiff3 = (len * (u64)q->rate_ns) >> q->rate_shft;
+
 		if(tdiff1 < 0)
 			b->tin_time_next_packet += tdiff2;
 		else if(tdiff1 < tdiff2)
 			b->tin_time_next_packet = now + tdiff2;
+
+		q->time_next_packet += tdiff3;
+		while(q->cur_tin--)
+			(--b)->tin_time_next_packet += tdiff3;
+		q->cur_tin = 0;
 	}
-	q->time_next_packet += (len * (u64)q->rate_ns) >> q->rate_shft;
 
 	if(q->overflow_timeout)
 		q->overflow_timeout--;
