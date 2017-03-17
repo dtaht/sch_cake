@@ -246,6 +246,7 @@ struct cake_sched_data {
 
 	struct qdisc_watchdog watchdog;
 	const u8	*tin_index;
+	const u8	*tin_order;
 
 	/* bandwidth capacity estimate */
 	u64		last_packet_time;
@@ -349,6 +350,11 @@ static const u8 besteffort[] = {0, 0, 0, 0, 0, 0, 0, 0,
 				0, 0, 0, 0, 0, 0, 0, 0,
 				0, 0, 0, 0, 0, 0, 0, 0,
 				};
+
+/* tin priority order, ascending */
+static const u8 normal_order[] = {0, 1, 2, 3, 4, 5, 6, 7};
+static const u8 bulk_order[] = {1, 0, 2, 3};
+
 
 #if defined(CONFIG_NF_CONNTRACK) || defined(CONFIG_NF_CONNTRACK_MODULE)
 
@@ -1139,10 +1145,11 @@ begin:
 		 * - the highest-priority tin with queue and meeting schedule, if any
 		 * - the earliest-scheduled tin with queue, otherwise
 		 */
-		int tin, best_tin=0;
+		int oi, best_tin=0;
 		s64 best_time = 0xFFFFFFFFFFFFUL;
 
-		for(tin=0; tin < q->tin_cnt; tin++) {
+		for(oi=0; oi < q->tin_cnt; oi++) {
+			int tin = q->tin_order[oi];
 			b = q->tins + tin;
 			if((b->sparse_flow_count + b->bulk_flow_count) > 0) {
 				s64 tdiff = b->tin_time_next_packet - now;
@@ -1291,9 +1298,6 @@ retry:
 			b->tin_time_next_packet = now + tdiff2;
 
 		q->time_next_packet += tdiff3;
-		while(q->cur_tin--)
-			(--b)->tin_time_next_packet += tdiff3;
-		q->cur_tin = 0;
 	}
 
 	if(q->overflow_timeout)
@@ -1489,6 +1493,7 @@ static int cake_config_diffserv8(struct Qdisc *sch)
 
 	/* codepoint to class mapping */
 	q->tin_index = diffserv8;
+	q->tin_order = normal_order;
 
 	/* class characteristics */
 	for (i = 0; i < q->tin_cnt; i++) {
@@ -1535,11 +1540,12 @@ static int cake_config_diffserv4(struct Qdisc *sch)
 
 	/* codepoint to class mapping */
 	q->tin_index = diffserv4;
+	q->tin_order = bulk_order;
 
 	/* class characteristics */
-	cake_set_rate(&q->tins[0], rate, mtu,
+	cake_set_rate(&q->tins[0], rate >> 4, mtu,
 		      US2TIME(q->target), US2TIME(q->interval));
-	cake_set_rate(&q->tins[1], rate - (rate >> 4), mtu,
+	cake_set_rate(&q->tins[1], rate, mtu,
 		      US2TIME(q->target), US2TIME(q->interval));
 	cake_set_rate(&q->tins[2], rate >> 1, mtu,
 		      US2TIME(q->target), US2TIME(q->interval));
@@ -1578,11 +1584,12 @@ static int cake_config_diffserv3(struct Qdisc *sch)
 
 	/* codepoint to class mapping */
 	q->tin_index = diffserv3;
+	q->tin_order = bulk_order;
 
 	/* class characteristics */
-	cake_set_rate(&q->tins[0], rate, mtu,
+	cake_set_rate(&q->tins[0], rate >> 4, mtu,
 		      US2TIME(q->target), US2TIME(q->interval));
-	cake_set_rate(&q->tins[1], rate - (rate >> 4), mtu,
+	cake_set_rate(&q->tins[1], rate, mtu,
 		      US2TIME(q->target), US2TIME(q->interval));
 	cake_set_rate(&q->tins[2], rate >> 2, mtu,
 		      US2TIME(q->target), US2TIME(q->target));
@@ -1618,13 +1625,14 @@ static int cake_config_diffserv_llt(struct Qdisc *sch)
 
 	/* codepoint to class mapping */
 	q->tin_index = diffserv_llt;
+	q->tin_order = normal_order;
 
 	/* class characteristics */
-	cake_set_rate(&q->tins[0], rate, mtu,
+	cake_set_rate(&q->tins[0], rate >> 1, mtu,
 		      US2TIME(q->target * 4), US2TIME(q->interval * 4));
-	cake_set_rate(&q->tins[1], rate, mtu,
+	cake_set_rate(&q->tins[1], rate >> 1, mtu,
 		      US2TIME(q->target), US2TIME(q->interval));
-	cake_set_rate(&q->tins[2], rate, mtu,
+	cake_set_rate(&q->tins[2], rate >> 1, mtu,
 		      US2TIME(q->target), US2TIME(q->target));
 	cake_set_rate(&q->tins[3], rate >> 4, mtu,
 		      US2TIME(q->target), US2TIME(q->interval));
