@@ -1121,21 +1121,40 @@ begin:
 	}
 
 	/* Choose a class to work on. */
-	while (b->tin_deficit < 0 || !(b->sparse_flow_count + b->bulk_flow_count)) {
-		/* this is the priority soft-shaper magic */
-		if (b->tin_deficit <= 0) {
-			b->tin_deficit +=
-				b->tin_time_next_packet > now ?
-					b->tin_quantum_band :
-					b->tin_quantum_prio;
+	if(!q->rate_ns) {
+		/* in unlimited mode, can't rely on shaper timings, just balance with DRR */
+		while (b->tin_deficit < 0 || !(b->sparse_flow_count + b->bulk_flow_count)) {
+			if (b->tin_deficit <= 0)
+				b->tin_deficit += b->tin_quantum_band;
+
+			q->cur_tin++;
+			b++;
+			if (q->cur_tin >= q->tin_cnt) {
+				q->cur_tin = 0;
+				b = q->tins;
+			}
+		}
+	} else {
+		/* in shaped mode, choose:
+		 * - the highest-priority tin with queue and meeting schedule, if any
+		 * - the earliest-scheduled tin with queue, otherwise
+		 */
+		int tin, best_tin=0;
+		u64 best_time = -1;
+
+		for(tin=0; tin < q->tin_cnt; q++) {
+			b = q->tins + tin;
+			if((b->sparse_flow_count + b->bulk_flow_count) > 0) {
+				s64 tdiff = b->tin_time_next_packet - now;
+				if(tdiff <= 0 || tdiff <= best_time) {
+					best_time = tdiff;
+					best_tin = tin;
+				}
+			}
 		}
 
-		q->cur_tin++;
-		b++;
-		if (q->cur_tin >= q->tin_cnt) {
-			q->cur_tin = 0;
-			b = q->tins;
-		}
+		q->cur_tin = best_tin;
+		b = q->tins + best_tin;
 	}
 
 retry:
@@ -1261,8 +1280,8 @@ retry:
 	/* charge packet bandwidth to this tin, and
 	 * to the global shaper.
 	 */
-	b->tin_time_next_packet +=
-			(len * (u64)b->tin_rate_ns) >> b->tin_rate_shft;
+	b->tin_time_next_packet = now + max(b->tin_time_next_packet - now,
+			(len * (u64)b->tin_rate_ns) >> b->tin_rate_shft);
 	q->time_next_packet += (len * (u64)q->rate_ns) >> q->rate_shft;
 
 	if(q->overflow_timeout)
