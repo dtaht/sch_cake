@@ -1142,7 +1142,7 @@ begin:
 		int tin, best_tin=0;
 		u64 best_time = -1;
 
-		for(tin=0; tin < q->tin_cnt; q++) {
+		for(tin=0; tin < q->tin_cnt; tin++) {
 			b = q->tins + tin;
 			if((b->sparse_flow_count + b->bulk_flow_count) > 0) {
 				s64 tdiff = b->tin_time_next_packet - now;
