@@ -1280,8 +1280,14 @@ retry:
 	/* charge packet bandwidth to this tin, and
 	 * to the global shaper.
 	 */
-	b->tin_time_next_packet = now + max(b->tin_time_next_packet - now,
-			(len * (u64)b->tin_rate_ns) >> b->tin_rate_shft);
+	{
+		s64 tdiff1 = b->tin_time_next_packet - now;
+		s64 tdiff2 = (len * (u64)b->tin_rate_ns) >> b->tin_rate_shft;
+		if(tdiff1 < 0)
+			b->tin_time_next_packet += tdiff2;
+		else if(tdiff1 < tdiff2)
+			b->tin_time_next_packet = now + tdiff2;
+	}
 	q->time_next_packet += (len * (u64)q->rate_ns) >> q->rate_shft;
 
 	if(q->overflow_timeout)
