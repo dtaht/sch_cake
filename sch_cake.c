@@ -1582,7 +1582,7 @@ static int cake_config_diffserv3(struct Qdisc *sch)
 	/* class characteristics */
 	cake_set_rate(&q->tins[0], rate >> 4, mtu,
 		      US2TIME(q->target), US2TIME(q->interval));
-	cake_set_rate(&q->tins[1], rate, mtu,
+	cake_set_rate(&q->tins[1], rate - (rate >> 4), mtu,
 		      US2TIME(q->target), US2TIME(q->interval));
 	cake_set_rate(&q->tins[2], rate >> 2, mtu,
 		      US2TIME(q->target), US2TIME(q->target));
