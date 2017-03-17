@@ -1140,7 +1140,7 @@ begin:
 		 * - the earliest-scheduled tin with queue, otherwise
 		 */
 		int tin, best_tin=0;
-		u64 best_time = -1;
+		s64 best_time = 0xFFFFFFFFFFFFUL;
 
 		for(tin=0; tin < q->tin_cnt; tin++) {
 			b = q->tins + tin;
