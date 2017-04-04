@@ -246,6 +246,7 @@ struct cake_sched_data {
 
 	struct qdisc_watchdog watchdog;
 	const u8	*tin_index;
+	const u8	*tin_order;
 
 	/* bandwidth capacity estimate */
 	u64		last_packet_time;
@@ -270,6 +271,7 @@ enum {
 	CAKE_FLAG_ATM = 0x0001,
 	CAKE_FLAG_PTM = 0x0002,
 	CAKE_FLAG_AUTORATE_INGRESS = 0x0010,
+	CAKE_FLAG_INGRESS = 0x0040,
 	CAKE_FLAG_WASH = 0x0100
 };
 
@@ -349,6 +351,11 @@ static const u8 besteffort[] = {0, 0, 0, 0, 0, 0, 0, 0,
 				0, 0, 0, 0, 0, 0, 0, 0,
 				0, 0, 0, 0, 0, 0, 0, 0,
 				};
+
+/* tin priority order, ascending */
+static const u8 normal_order[] = {0, 1, 2, 3, 4, 5, 6, 7};
+static const u8 bulk_order[] = {1, 0, 2, 3};
+
 
 #if defined(CONFIG_NF_CONNTRACK) || defined(CONFIG_NF_CONNTRACK_MODULE)
 
@@ -762,6 +769,8 @@ static void cake_heapify_up(struct cake_sched_data *q, u16 i)
 	}
 }
 
+static void cake_advance_shaper(struct cake_sched_data *q, struct cake_tin_data *b, u32 len, u64 now);
+
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 8, 0)
 static unsigned int cake_drop(struct Qdisc *sch)
 #else
@@ -774,6 +783,7 @@ static unsigned int cake_drop(struct Qdisc *sch, struct sk_buff **to_free)
 	struct cake_tin_data *b;
 	struct cake_flow *flow;
 	struct cake_heap_entry qq;
+	u64 now = cobalt_get_time();
 
 	if(!q->overflow_timeout) {
 		int i;
@@ -797,7 +807,7 @@ static unsigned int cake_drop(struct Qdisc *sch, struct sk_buff **to_free)
 		return idx + (tin << 16);
 	}
 
-	if(cobalt_queue_full(&flow->cvars, &b->cparams, cobalt_get_time()))
+	if(cobalt_queue_full(&flow->cvars, &b->cparams, now))
 		b->unresponsive_flow_count++;
 
 	len = qdisc_pkt_len(skb);
@@ -809,6 +819,9 @@ static unsigned int cake_drop(struct Qdisc *sch, struct sk_buff **to_free)
 
 	b->tin_dropped++;
 	sch->qstats.drops++;
+
+	if(q->rate_flags & CAKE_FLAG_INGRESS)
+		cake_advance_shaper(q, b, cake_overhead(q, len), now);
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 8, 0)
 	kfree_skb(skb);
@@ -1139,10 +1152,11 @@ begin:
 		 * - the highest-priority tin with queue and meeting schedule, if any
 		 * - the earliest-scheduled tin with queue, otherwise
 		 */
-		int tin, best_tin=0;
-		u64 best_time = -1;
+		int oi, best_tin=0;
+		s64 best_time = 0xFFFFFFFFFFFFUL;
 
-		for(tin=0; tin < q->tin_cnt; tin++) {
+		for(oi=0; oi < q->tin_cnt; oi++) {
+			int tin = q->tin_order[oi];
 			b = q->tins + tin;
 			if((b->sparse_flow_count + b->bulk_flow_count) > 0) {
 				s64 tdiff = b->tin_time_next_packet - now;
@@ -1250,6 +1264,8 @@ retry:
 			break;
 
 		/* drop this packet, get another one */
+		if(q->rate_flags & CAKE_FLAG_INGRESS)
+			cake_advance_shaper(q, b, cake_overhead(q, qdisc_pkt_len(skb)), now);
 		b->tin_dropped++;
 		qdisc_tree_reduce_backlog(sch, 1, qdisc_pkt_len(skb));
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 8, 0)
@@ -1277,17 +1293,31 @@ retry:
 	b->base_delay = cake_ewma(b->base_delay, delay,
 				     delay < b->base_delay ? 2 : 8);
 
-	/* charge packet bandwidth to this tin, and
-	 * to the global shaper.
-	 */
-	b->tin_time_next_packet = now + max(b->tin_time_next_packet - now,
-			(len * (u64)b->tin_rate_ns) >> b->tin_rate_shft);
-	q->time_next_packet += (len * (u64)q->rate_ns) >> q->rate_shft;
+	cake_advance_shaper(q, b, len, now);
 
 	if(q->overflow_timeout)
 		q->overflow_timeout--;
 
 	return skb;
+}
+
+static void cake_advance_shaper(struct cake_sched_data *q, struct cake_tin_data *b, u32 len, u64 now)
+{
+	/* charge packet bandwidth to this tin, lower tins,
+	 * and to the global shaper.
+	 */
+	if(q->rate_ns) {
+		s64 tdiff1 = b->tin_time_next_packet - now;
+		s64 tdiff2 = (len * (u64)b->tin_rate_ns) >> b->tin_rate_shft;
+		s64 tdiff3 = (len * (u64)q->rate_ns) >> q->rate_shft;
+
+		if(tdiff1 < 0)
+			b->tin_time_next_packet += tdiff2;
+		else if(tdiff1 < tdiff2)
+			b->tin_time_next_packet = now + tdiff2;
+
+		q->time_next_packet += tdiff3;
+	}
 }
 
 static void cake_reset(struct Qdisc *sch)
@@ -1477,6 +1507,7 @@ static int cake_config_diffserv8(struct Qdisc *sch)
 
 	/* codepoint to class mapping */
 	q->tin_index = diffserv8;
+	q->tin_order = normal_order;
 
 	/* class characteristics */
 	for (i = 0; i < q->tin_cnt; i++) {
@@ -1523,6 +1554,7 @@ static int cake_config_diffserv4(struct Qdisc *sch)
 
 	/* codepoint to class mapping */
 	q->tin_index = diffserv4;
+	q->tin_order = bulk_order;
 
 	/* class characteristics */
 	cake_set_rate(&q->tins[0], rate >> 4, mtu,
@@ -1566,6 +1598,7 @@ static int cake_config_diffserv3(struct Qdisc *sch)
 
 	/* codepoint to class mapping */
 	q->tin_index = diffserv3;
+	q->tin_order = bulk_order;
 
 	/* class characteristics */
 	cake_set_rate(&q->tins[0], rate >> 4, mtu,
@@ -1606,13 +1639,14 @@ static int cake_config_diffserv_llt(struct Qdisc *sch)
 
 	/* codepoint to class mapping */
 	q->tin_index = diffserv_llt;
+	q->tin_order = normal_order;
 
 	/* class characteristics */
-	cake_set_rate(&q->tins[0], rate, mtu,
+	cake_set_rate(&q->tins[0], rate >> 1, mtu,
 		      US2TIME(q->target * 4), US2TIME(q->interval * 4));
-	cake_set_rate(&q->tins[1], rate, mtu,
+	cake_set_rate(&q->tins[1], rate >> 1, mtu,
 		      US2TIME(q->target), US2TIME(q->interval));
-	cake_set_rate(&q->tins[2], rate, mtu,
+	cake_set_rate(&q->tins[2], rate >> 1, mtu,
 		      US2TIME(q->target), US2TIME(q->target));
 	cake_set_rate(&q->tins[3], rate >> 4, mtu,
 		      US2TIME(q->target), US2TIME(q->interval));
@@ -1765,6 +1799,13 @@ static int cake_change(struct Qdisc *sch, struct nlattr *opt)
 			q->rate_flags |= CAKE_FLAG_AUTORATE_INGRESS;
 		else
 			q->rate_flags &= ~CAKE_FLAG_AUTORATE_INGRESS;
+	}
+
+	if (tb[TCA_CAKE_INGRESS]) {
+		if (!!nla_get_u32(tb[TCA_CAKE_INGRESS]))
+			q->rate_flags |= CAKE_FLAG_INGRESS;
+		else
+			q->rate_flags &= ~CAKE_FLAG_INGRESS;
 	}
 
 	if (tb[TCA_CAKE_MEMORY])
