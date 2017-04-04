@@ -1960,6 +1960,10 @@ static int cake_dump(struct Qdisc *sch, struct sk_buff *skb)
 			!!(q->rate_flags & CAKE_FLAG_AUTORATE_INGRESS)))
 		goto nla_put_failure;
 
+	if (nla_put_u32(skb, TCA_CAKE_INGRESS,
+			!!(q->rate_flags & CAKE_FLAG_INGRESS)))
+		goto nla_put_failure;
+
 	if (nla_put_u32(skb, TCA_CAKE_MEMORY, q->buffer_config_limit))
 		goto nla_put_failure;
 
