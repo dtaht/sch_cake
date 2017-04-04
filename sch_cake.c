@@ -1771,6 +1771,13 @@ static int cake_change(struct Qdisc *sch, struct nlattr *opt)
 			q->rate_flags &= ~CAKE_FLAG_AUTORATE_INGRESS;
 	}
 
+	if (tb[TCA_CAKE_INGRESS]) {
+		if (!!nla_get_u32(tb[TCA_CAKE_INGRESS]))
+			q->rate_flags |= CAKE_FLAG_INGRESS;
+		else
+			q->rate_flags &= ~CAKE_FLAG_INGRESS;
+	}
+
 	if (tb[TCA_CAKE_MEMORY])
 		q->buffer_config_limit = nla_get_s32(tb[TCA_CAKE_MEMORY]);
 
