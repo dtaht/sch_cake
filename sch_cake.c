@@ -1392,6 +1392,7 @@ static int cake_config_besteffort(struct Qdisc *sch)
 	q->tin_cnt = 1;
 
 	q->tin_index = besteffort;
+	q->tin_order = normal_order;
 
 	cake_set_rate(b, rate, mtu, US2TIME(q->target), US2TIME(q->interval));
 	b->tin_quantum_band = 65535;
@@ -1412,6 +1413,7 @@ static int cake_config_precedence(struct Qdisc *sch)
 
 	q->tin_cnt = 8;
 	q->tin_index = precedence;
+	q->tin_order = normal_order;
 
 	for (i = 0; i < q->tin_cnt; i++) {
 		struct cake_tin_data *b = &q->tins[i];
