@@ -914,9 +914,18 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch, struct sk_buff *
 		if (b->tin_time_next_packet < now)
 			b->tin_time_next_packet = now;
 
-		if (!sch->q.qlen)
-			if (q->time_next_packet < now)
+		if (!sch->q.qlen) {
+			if (q->time_next_packet < now) {
 				q->time_next_packet = now;
+			} else if (q->time_next_packet > now) {
+				sch->qstats.overlimits++;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 8, 0)
+				codel_watchdog_schedule_ns(&q->watchdog, q->time_next_packet, true);
+#else
+				qdisc_watchdog_schedule_ns(&q->watchdog, q->time_next_packet);
+#endif
+			}
+		}
 	}
 
 	if (unlikely(len > b->max_skblen))
@@ -1041,7 +1050,7 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch, struct sk_buff *
 
 		flow->deficit = (b->flow_quantum * quantum_div[host_load]) >> 16;
 	} else if(flow->set == CAKE_SET_SPARSE_WAIT) {
-		/* this flow is empty, accounted as a sparse flow, but actually in the bulk rotation */
+		/* this flow was empty, accounted as a sparse flow, but actually in the bulk rotation */
 		flow->set = CAKE_SET_BULK;
 		b->sparse_flow_count--;
 		b->bulk_flow_count++;
@@ -1294,6 +1303,25 @@ retry:
 				     delay < b->base_delay ? 2 : 8);
 
 	cake_advance_shaper(q, b, len, now);
+	if (q->time_next_packet > now && sch->q.qlen) {
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 8, 0)
+		codel_watchdog_schedule_ns(&q->watchdog, q->time_next_packet, true);
+#else
+		qdisc_watchdog_schedule_ns(&q->watchdog, q->time_next_packet);
+#endif
+	} else if(!sch->q.qlen) {
+		int i;
+		for(i=0; i < q->tin_cnt; i++) {
+			if(q->tins[i].decaying_flow_count) {
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 8, 0)
+				codel_watchdog_schedule_ns(&q->watchdog, now + q->tins[i].cparams.target, true);
+#else
+				qdisc_watchdog_schedule_ns(&q->watchdog, now + q->tins[i].cparams.target);
+#endif
+				break;
+			}
+		}
+	}
 
 	if(q->overflow_timeout)
 		q->overflow_timeout--;
