@@ -1370,6 +1370,7 @@ static const struct nla_policy cake_policy[TCA_CAKE_MAX + 1] = {
 	[TCA_CAKE_ETHERNET]      = { .type = NLA_U32 },
 	[TCA_CAKE_WASH]		 = { .type = NLA_U32 },
 	[TCA_CAKE_MPU]		 = { .type = NLA_U32 },
+	[TCA_CAKE_INGRESS]		 = { .type = NLA_U32 },
 };
 
 static void cake_set_rate(struct cake_tin_data *b, u64 rate, u32 mtu,
