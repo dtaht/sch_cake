@@ -1644,11 +1644,14 @@ static int cake_config_diffserv_llt(struct Qdisc *sch)
 	q->tin_order = normal_order;
 
 	/* class characteristics */
-	cake_set_rate(&q->tins[0], rate, mtu,
-		      US2TIME(q->target * 4), US2TIME(q->interval * 4));
-	cake_set_rate(&q->tins[1], rate, mtu,
+	cake_set_rate(&q->tins[5], rate, mtu,
 		      US2TIME(q->target), US2TIME(q->interval));
-	cake_set_rate(&q->tins[2], rate, mtu,
+
+	cake_set_rate(&q->tins[0], rate/3, mtu,
+		      US2TIME(q->target * 4), US2TIME(q->interval * 4));
+	cake_set_rate(&q->tins[1], rate/3, mtu,
+		      US2TIME(q->target), US2TIME(q->interval));
+	cake_set_rate(&q->tins[2], rate/3, mtu,
 		      US2TIME(q->target), US2TIME(q->target));
 	cake_set_rate(&q->tins[3], rate >> 4, mtu,
 		      US2TIME(q->target), US2TIME(q->interval));
@@ -1669,7 +1672,7 @@ static int cake_config_diffserv_llt(struct Qdisc *sch)
 	q->tins[3].tin_quantum_band = 256;
 	q->tins[4].tin_quantum_band = 16;
 
-	return 0;
+	return 5;
 }
 
 static void cake_reconfigure(struct Qdisc *sch)
