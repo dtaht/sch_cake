@@ -1415,7 +1415,7 @@ static int cake_config_besteffort(struct Qdisc *sch)
 {
 	struct cake_sched_data *q = qdisc_priv(sch);
 	struct cake_tin_data *b = &q->tins[0];
-	u64 rate = q->rate_bps;
+	u32 rate = q->rate_bps;
 	u32 mtu = psched_mtu(qdisc_dev(sch));
 
 	q->tin_cnt = 1;
@@ -1434,7 +1434,7 @@ static int cake_config_precedence(struct Qdisc *sch)
 {
 	/* convert high-level (user visible) parameters into internal format */
 	struct cake_sched_data *q = qdisc_priv(sch);
-	u64 rate = q->rate_bps;
+	u32 rate = q->rate_bps;
 	u32 mtu = psched_mtu(qdisc_dev(sch));
 	u32 quantum1 = 256;
 	u32 quantum2 = 256;
@@ -1528,7 +1528,7 @@ static int cake_config_diffserv8(struct Qdisc *sch)
 */
 
 	struct cake_sched_data *q = qdisc_priv(sch);
-	u64 rate = q->rate_bps;
+	u32 rate = q->rate_bps;
 	u32 mtu = psched_mtu(qdisc_dev(sch));
 	u32 quantum1 = 256;
 	u32 quantum2 = 256;
@@ -1577,7 +1577,7 @@ static int cake_config_diffserv4(struct Qdisc *sch)
  */
 
 	struct cake_sched_data *q = qdisc_priv(sch);
-	u64 rate = q->rate_bps;
+	u32 rate = q->rate_bps;
 	u32 mtu = psched_mtu(qdisc_dev(sch));
 	u32 quantum = 1024;
 
@@ -1621,7 +1621,7 @@ static int cake_config_diffserv3(struct Qdisc *sch)
  *		Latency Sensitive	(TOS4, VA, EF, CS6, CS7)
  */
 	struct cake_sched_data *q = qdisc_priv(sch);
-	u64 rate = q->rate_bps;
+	u32 rate = q->rate_bps;
 	u32 mtu = psched_mtu(qdisc_dev(sch));
 	u32 quantum = 1024;
 
@@ -1663,7 +1663,7 @@ static int cake_config_diffserv_llt(struct Qdisc *sch)
  *		Network Control		(CS6, CS7)
  */
 	struct cake_sched_data *q = qdisc_priv(sch);
-	u64 rate = q->rate_bps;
+	u32 rate = q->rate_bps;
 	u32 mtu = psched_mtu(qdisc_dev(sch));
 
 	q->tin_cnt = 5;
