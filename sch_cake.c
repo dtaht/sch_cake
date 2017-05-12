@@ -152,11 +152,10 @@ struct cake_flow {
 
 struct cake_host {
 	u32 srchost_tag;
-	s16 srchost_deficit;
-	u16 srchost_refcnt;
 	u32 dsthost_tag;
-	s16 dsthost_deficit;
+	u16 srchost_refcnt;
 	u16 dsthost_refcnt;
+	u32 pad;
 };
 
 struct cake_heap_entry {
@@ -1273,8 +1272,12 @@ retry:
 			break;
 
 		/* drop this packet, get another one */
-		if(q->rate_flags & CAKE_FLAG_INGRESS)
-			cake_advance_shaper(q, b, cake_overhead(q, qdisc_pkt_len(skb)), now);
+		if(q->rate_flags & CAKE_FLAG_INGRESS) {
+			len = cake_overhead(q, qdisc_pkt_len(skb));
+			cake_advance_shaper(q, b, len, now);
+			flow->deficit -= len;
+			b->tin_deficit -= len;
+		}
 		b->tin_dropped++;
 		qdisc_tree_reduce_backlog(sch, 1, qdisc_pkt_len(skb));
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 8, 0)
@@ -1283,6 +1286,8 @@ retry:
 		qdisc_qstats_drop(sch);
 		kfree_skb(skb);
 #endif
+		if(q->rate_flags & CAKE_FLAG_INGRESS)
+			goto retry;
 	}
 
 	b->tin_ecn_mark += !!flow->cvars.ecn_marked;
@@ -1291,8 +1296,6 @@ retry:
 	len = cake_overhead(q, qdisc_pkt_len(skb));
 	flow->deficit -= len;
 	b->tin_deficit -= len;
-	srchost->srchost_deficit -= len;
-	dsthost->dsthost_deficit -= len;
 
 	/* collect delay stats */
 	delay = now - cobalt_get_enqueue_time(skb);
