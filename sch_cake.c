@@ -1354,8 +1354,11 @@ static void cake_advance_shaper(struct cake_sched_data *q, struct cake_tin_data 
 			b->tin_time_next_packet = now + tdiff2;
 
 		q->time_next_packet += tdiff3;
-		if(!drop)
+		if(!drop) {
 			q->failsafe_next_packet += tdiff4;
+			if(q->failsafe_next_packet > q->time_next_packet)
+				q->failsafe_next_packet = q->time_next_packet;
+		}
 	}
 }
 
