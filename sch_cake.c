@@ -1775,7 +1775,7 @@ static int cake_change(struct Qdisc *sch, struct nlattr *opt)
 	if (!opt)
 		return -EINVAL;
 
-	err = nla_parse_nested(tb, TCA_CAKE_MAX, opt, cake_policy);
+	err = nla_parse_nested(tb, TCA_CAKE_MAX, opt, cake_policy, NULL);
 	if (err < 0)
 		return err;
 
@@ -2063,121 +2063,7 @@ static int cake_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 	return i;
 }
 
-static struct Qdisc *cake_leaf(struct Qdisc *sch, unsigned long arg)
-{
-	return NULL;
-}
-
-static unsigned long cake_get(struct Qdisc *sch, u32 classid)
-{
-	return 0;
-}
-
-static unsigned long cake_bind(struct Qdisc *sch, unsigned long parent,
-			       u32 classid)
-{
-	return 0;
-}
-
-static void cake_put(struct Qdisc *q, unsigned long cl)
-{
-}
-
-static struct tcf_proto **cake_find_tcf(struct Qdisc *sch, unsigned long cl)
-{
-	return NULL;
-}
-
-static int cake_dump_tin(struct Qdisc *sch, unsigned long cl,
-			 struct sk_buff *skb, struct tcmsg *tcm)
-{
-	tcm->tcm_handle |= TC_H_MIN(cl);
-	return 0;
-}
-
-static int cake_dump_class_stats(struct Qdisc *sch, unsigned long cl,
-				 struct gnet_dump *d)
-{
-	/* reuse fq_codel stats format */
-	struct cake_sched_data *q = qdisc_priv(sch);
-	u32 tin = (cl-1) / CAKE_QUEUES, idx = (cl-1) % CAKE_QUEUES;
-	struct cake_tin_data *b = &q->tins[tin];
-	struct gnet_stats_queue qs = {0};
-	struct tc_fq_codel_xstats xstats;
-
-	if (tin < q->tin_cnt && idx < CAKE_QUEUES) {
-		const struct cake_flow *flow = &b->flows[idx];
-		const struct sk_buff *skb = flow->head;
-
-		memset(&xstats, 0, sizeof(xstats));
-		xstats.type = TCA_FQ_CODEL_XSTATS_CLASS;
-		xstats.class_stats.deficit = flow->deficit;
-		xstats.class_stats.ldelay = 0;
-		xstats.class_stats.count = flow->cvars.count;
-		xstats.class_stats.lastcount = 0;
-		xstats.class_stats.dropping = flow->cvars.dropping;
-		if (flow->cvars.dropping) {
-			cobalt_tdiff_t delta = flow->cvars.drop_next -
-				cobalt_get_time();
-
-			xstats.class_stats.drop_next = (delta >= 0) ?
-				cobalt_time_to_us(delta) :
-				-cobalt_time_to_us(-delta);
-		}
-		while (skb) {
-			qs.qlen++;
-			skb = skb->next;
-		}
-		qs.backlog = b->backlogs[idx];
-		qs.drops = 0;
-	}
-	if (codel_stats_copy_queue(d, NULL, &qs, 0) < 0)
-		return -1;
-	if (tin < q->tin_cnt && idx < CAKE_QUEUES)
-		return gnet_stats_copy_app(d, &xstats, sizeof(xstats));
-	return 0;
-}
-
-static void cake_walk(struct Qdisc *sch, struct qdisc_walker *arg)
-{
-	struct cake_sched_data *q = qdisc_priv(sch);
-	unsigned int i, j, k;
-
-	if (arg->stop)
-		return;
-
-	for (j = k = 0; j < q->tin_cnt; j++) {
-		struct cake_tin_data *b = &q->tins[j];
-
-		for (i = 0; i < CAKE_QUEUES; i++, k++) {
-			if (list_empty(&b->flows[i].flowchain) ||
-			    arg->count < arg->skip) {
-				arg->count++;
-				continue;
-			}
-			if (arg->fn(sch, k + 1, arg) < 0) {
-				arg->stop = 1;
-				break;
-			}
-			arg->count++;
-		}
-	}
-}
-
-static const struct Qdisc_class_ops cake_class_ops = {
-	.leaf		=	cake_leaf,
-	.get		=	cake_get,
-	.put		=	cake_put,
-	.tcf_chain	=	cake_find_tcf,
-	.bind_tcf	=	cake_bind,
-	.unbind_tcf	=	cake_put,
-	.dump		=	cake_dump_tin,
-	.dump_stats	=	cake_dump_class_stats,
-	.walk		=	cake_walk,
-};
-
 static struct Qdisc_ops cake_qdisc_ops __read_mostly = {
-	.cl_ops		=	&cake_class_ops,
 	.id		=	"cake",
 	.priv_size	=	sizeof(struct cake_sched_data),
 	.enqueue	=	cake_enqueue,
