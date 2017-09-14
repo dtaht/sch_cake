@@ -271,6 +271,7 @@ enum {
 	CAKE_FLAG_ATM = 0x0001,
 	CAKE_FLAG_PTM = 0x0002,
 	CAKE_FLAG_AUTORATE_INGRESS = 0x0010,
+	CAKE_FLAG_INGRESS = 0x0040,
 	CAKE_FLAG_WASH = 0x0100
 };
 
@@ -768,6 +769,8 @@ static void cake_heapify_up(struct cake_sched_data *q, u16 i)
 	}
 }
 
+static void cake_advance_shaper(struct cake_sched_data *q, struct cake_tin_data *b, u32 len, u64 now);
+
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 8, 0)
 static unsigned int cake_drop(struct Qdisc *sch)
 #else
@@ -780,6 +783,7 @@ static unsigned int cake_drop(struct Qdisc *sch, struct sk_buff **to_free)
 	struct cake_tin_data *b;
 	struct cake_flow *flow;
 	struct cake_heap_entry qq;
+	u64 now = cobalt_get_time();
 
 	if(!q->overflow_timeout) {
 		int i;
@@ -803,7 +807,7 @@ static unsigned int cake_drop(struct Qdisc *sch, struct sk_buff **to_free)
 		return idx + (tin << 16);
 	}
 
-	if(cobalt_queue_full(&flow->cvars, &b->cparams, cobalt_get_time()))
+	if(cobalt_queue_full(&flow->cvars, &b->cparams, now))
 		b->unresponsive_flow_count++;
 
 	len = qdisc_pkt_len(skb);
@@ -815,6 +819,9 @@ static unsigned int cake_drop(struct Qdisc *sch, struct sk_buff **to_free)
 
 	b->tin_dropped++;
 	sch->qstats.drops++;
+
+	if(q->rate_flags & CAKE_FLAG_INGRESS)
+		cake_advance_shaper(q, b, cake_overhead(q, len), now);
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 8, 0)
 	kfree_skb(skb);
@@ -1257,6 +1264,8 @@ retry:
 			break;
 
 		/* drop this packet, get another one */
+		if(q->rate_flags & CAKE_FLAG_INGRESS)
+			cake_advance_shaper(q, b, cake_overhead(q, qdisc_pkt_len(skb)), now);
 		b->tin_dropped++;
 		qdisc_tree_reduce_backlog(sch, 1, qdisc_pkt_len(skb));
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 8, 0)
@@ -1284,6 +1293,16 @@ retry:
 	b->base_delay = cake_ewma(b->base_delay, delay,
 				     delay < b->base_delay ? 2 : 8);
 
+	cake_advance_shaper(q, b, len, now);
+
+	if(q->overflow_timeout)
+		q->overflow_timeout--;
+
+	return skb;
+}
+
+static void cake_advance_shaper(struct cake_sched_data *q, struct cake_tin_data *b, u32 len, u64 now)
+{
 	/* charge packet bandwidth to this tin, lower tins,
 	 * and to the global shaper.
 	 */
@@ -1299,11 +1318,6 @@ retry:
 
 		q->time_next_packet += tdiff3;
 	}
-
-	if(q->overflow_timeout)
-		q->overflow_timeout--;
-
-	return skb;
 }
 
 static void cake_reset(struct Qdisc *sch)
@@ -1378,6 +1392,7 @@ static int cake_config_besteffort(struct Qdisc *sch)
 	q->tin_cnt = 1;
 
 	q->tin_index = besteffort;
+	q->tin_order = normal_order;
 
 	cake_set_rate(b, rate, mtu, US2TIME(q->target), US2TIME(q->interval));
 	b->tin_quantum_band = 65535;
@@ -1398,6 +1413,7 @@ static int cake_config_precedence(struct Qdisc *sch)
 
 	q->tin_cnt = 8;
 	q->tin_index = precedence;
+	q->tin_order = normal_order;
 
 	for (i = 0; i < q->tin_cnt; i++) {
 		struct cake_tin_data *b = &q->tins[i];
@@ -1628,11 +1644,11 @@ static int cake_config_diffserv_llt(struct Qdisc *sch)
 	q->tin_order = normal_order;
 
 	/* class characteristics */
-	cake_set_rate(&q->tins[0], rate >> 1, mtu,
+	cake_set_rate(&q->tins[0], rate, mtu,
 		      US2TIME(q->target * 4), US2TIME(q->interval * 4));
-	cake_set_rate(&q->tins[1], rate >> 1, mtu,
+	cake_set_rate(&q->tins[1], rate, mtu,
 		      US2TIME(q->target), US2TIME(q->interval));
-	cake_set_rate(&q->tins[2], rate >> 1, mtu,
+	cake_set_rate(&q->tins[2], rate, mtu,
 		      US2TIME(q->target), US2TIME(q->target));
 	cake_set_rate(&q->tins[3], rate >> 4, mtu,
 		      US2TIME(q->target), US2TIME(q->interval));
@@ -1705,7 +1721,7 @@ static void cake_reconfigure(struct Qdisc *sch)
 		q->buffer_limit = ~0;
 	}
 
-	if (q->rate_bps)
+	if (1 || q->rate_bps)
 		sch->flags &= ~TCQ_F_CAN_BYPASS;
 	else
 		sch->flags |= TCQ_F_CAN_BYPASS;
@@ -1785,6 +1801,13 @@ static int cake_change(struct Qdisc *sch, struct nlattr *opt)
 			q->rate_flags |= CAKE_FLAG_AUTORATE_INGRESS;
 		else
 			q->rate_flags &= ~CAKE_FLAG_AUTORATE_INGRESS;
+	}
+
+	if (tb[TCA_CAKE_INGRESS]) {
+		if (!!nla_get_u32(tb[TCA_CAKE_INGRESS]))
+			q->rate_flags |= CAKE_FLAG_INGRESS;
+		else
+			q->rate_flags &= ~CAKE_FLAG_INGRESS;
 	}
 
 	if (tb[TCA_CAKE_MEMORY])
@@ -1937,6 +1960,10 @@ static int cake_dump(struct Qdisc *sch, struct sk_buff *skb)
 
 	if (nla_put_u32(skb, TCA_CAKE_AUTORATE,
 			!!(q->rate_flags & CAKE_FLAG_AUTORATE_INGRESS)))
+		goto nla_put_failure;
+
+	if (nla_put_u32(skb, TCA_CAKE_INGRESS,
+			!!(q->rate_flags & CAKE_FLAG_INGRESS)))
 		goto nla_put_failure;
 
 	if (nla_put_u32(skb, TCA_CAKE_MEMORY, q->buffer_config_limit))
