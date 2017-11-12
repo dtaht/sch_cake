@@ -868,6 +868,7 @@ enum {
 	TCA_CAKE_WASH,
 	TCA_CAKE_MPU,
 	TCA_CAKE_INGRESS,
+	TCA_CAKE_ACK_FILTER,
 	__TCA_CAKE_MAX
 };
 #define TCA_CAKE_MAX	(__TCA_CAKE_MAX - 1)
@@ -880,7 +881,7 @@ struct tc_cake_traffic_stats {
 
 #define TC_CAKE_MAX_TINS (8)
 struct tc_cake_xstats {
-	__u16 version;  /* == 4, increments when struct extended */
+	__u16 version;  /* == 5, increments when struct extended */
 	__u8  max_tins; /* == TC_CAKE_MAX_TINS */
 	__u8  tin_cnt;  /* <= TC_CAKE_MAX_TINS */
 
@@ -905,6 +906,7 @@ struct tc_cake_xstats {
 	__u32 capacity_estimate;  /* version 2 */
 	__u32 memory_limit;       /* version 3 */
 	__u32 memory_used;	  /* version 3 */
+	struct tc_cake_traffic_stats ack_drops [TC_CAKE_MAX_TINS]; /* version 5 */
 };
 
 #endif
