@@ -6,7 +6,6 @@
  * Copyright (C) 2014-2017 Dave Täht <dave+github@taht.net>
  * Copyright (C) 2015-2017 Sebastian Moeller <moeller0@gmx.de>
  * Copyright (C) 2015-2017 Kevin Darbyshire-Bryant <kevin@darbyshire-bryant.me.uk>
- * Copyright (C) 2017 Ryan Mounce <ryan@mounce.com.au>
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -201,8 +200,6 @@ struct cake_tin_data {
 	u32	packets;
 	u64	bytes;
 
-	u32	ack_drops;
-
 	/* moving averages */
 	cobalt_time_t avge_delay;
 	cobalt_time_t peak_delay;
@@ -274,8 +271,7 @@ enum {
 	CAKE_FLAG_PTM = 0x0002,
 	CAKE_FLAG_AUTORATE_INGRESS = 0x0010,
 	CAKE_FLAG_INGRESS = 0x0040,
-	CAKE_FLAG_WASH = 0x0100,
-	CAKE_FLAG_ACK_FILTER = 0x0200
+	CAKE_FLAG_WASH = 0x0100
 };
 
 enum {
@@ -671,101 +667,6 @@ flow_queue_add(struct cake_flow *flow, struct sk_buff *skb)
 	skb->next = NULL;
 }
 
-static struct sk_buff *ack_filter(struct cake_flow *flow, struct sk_buff *skb)
-{
-	int seglen;
-	struct sk_buff *skb_check, *skb_check_prev = NULL;
-	struct iphdr *iph, *iph_check;
-	struct ipv6hdr *ipv6h, *ipv6h_check;
-	struct tcphdr *tcph, *tcph_check;
-
-	// no other possible ACKs to filter
-	if (flow->head == skb)
-		return NULL;
-
-	iph = skb->encapsulation ? inner_ip_hdr(skb) : ip_hdr(skb);
-	ipv6h = skb->encapsulation ? inner_ipv6_hdr(skb) : ipv6_hdr(skb);
-
-	// check that the innermost network header is v4/v6, and contains TCP 
-	if (iph->version == 4) {
-		if (iph->protocol != IPPROTO_TCP)
-			return NULL;
-		seglen = ntohs(iph->tot_len) - (4*iph->ihl);
-		tcph = (struct tcphdr *)((void *)iph + (4*iph->ihl));
-	} else if (ipv6h->version == 6) {
-		if (ipv6h->nexthdr != IPPROTO_TCP)
-			return NULL;
-		seglen = ntohs(ipv6h->payload_len);
-		tcph = (struct tcphdr *)((void *)ipv6h + sizeof(struct ipv6hdr));
-	} else {
-		return NULL;
-	}
-
-	// the 'triggering' packet need only have the ACK flag set
-	// also check that SYN is not set, as there won't be any previous ACKs
-	if ((tcp_flag_word(tcph) &
-		__constant_cpu_to_be32(0x00120000)) != TCP_FLAG_ACK)
-		return NULL;
-
-	// the 'triggering' ACK is at the end of the queue
-	// we have already returned if it is the only packet
-	// iterate over everything from head of queue until second-to-last
-	skb_check = flow->head;
-	do {
-		iph_check = skb_check->encapsulation ? inner_ip_hdr(skb_check) : ip_hdr(skb_check);
-		ipv6h_check = skb_check->encapsulation ? inner_ipv6_hdr(skb_check) : ipv6_hdr(skb_check);
-
-		if (iph_check->version == 4 && iph->version == 4) {
-			if ((iph_check->protocol != IPPROTO_TCP) ||
-			    (iph_check->saddr != iph->saddr) ||
-			    (iph_check->daddr != iph->daddr)) {
-				continue;
-			}
-			seglen = ntohs(iph_check->tot_len) - (4*iph_check->ihl);
-			tcph_check = (struct tcphdr *)((void *)iph_check + (4*iph_check->ihl));
-		} else if (ipv6h_check->version == 6 && ipv6h->version == 6) {
-			if ((ipv6h_check->nexthdr != IPPROTO_TCP) ||
-			    ipv6_addr_cmp(&ipv6h_check->saddr, &ipv6h->saddr) ||
-			    ipv6_addr_cmp(&ipv6h_check->daddr, &ipv6h->daddr)) {
-				continue;
-			}
-			seglen = ntohs(ipv6h_check->payload_len);
-			tcph_check = (struct tcphdr *)((void *)ipv6h_check + sizeof(struct ipv6hdr));
-		} else {
-			continue;
-		}
-
-		// stricter criteria apply to ACKs that we may filter
-		// 3 reserved flags must be unset to avoid future breakage
-		// ECE/CWR/NS can be safely ignored
-		// ACK must be set
-		// All other flags URG/PSH/RST/SYN/FIN must be unset
-		// must be 'pure' ACK, contain zero bytes of segment data
-		// options are ignored
-		// new ack sequence must be greater
-		// equal DupACKs won't be filtered, would break fast recovery 
-		// SACKs won't be filtered as they look like DupACKs
-		if (((tcp_flag_word(tcph_check) &
-			__constant_cpu_to_be32(0x0E3F0000)) != TCP_FLAG_ACK) ||
-		    ((seglen - 4*tcph_check->doff) != 0) ||
-		    (tcph_check->source != tcph->source) ||
-		    (tcph_check->dest != tcph->dest) ||
-		    (ntohl(tcph_check->ack_seq) >= ntohl(tcph->ack_seq))) {
-			continue;
-		}
-
-		if (flow->head == skb_check)
-			flow->head = skb_check->next;
-		else
-			skb_check_prev->next = skb_check->next;
-
-		return skb_check;
-
-	} while ((skb_check_prev = skb_check) && (skb_check = skb_check->next)->next);
-
-	return NULL;
-}
-
 static inline u32 cake_overhead(struct cake_sched_data *q, u32 in)
 {
 	u32 out = in + q->rate_overhead;
@@ -985,10 +886,8 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch, struct sk_buff *
 	u32 idx, tin;
 	struct cake_tin_data *b;
 	struct cake_flow *flow;
-	// signed len to handle corner case, suppressed ACK larger than trigger 
-	int len = qdisc_pkt_len(skb);
+	u32 len = qdisc_pkt_len(skb);
 	u64 now = cobalt_get_time();
-	struct sk_buff *skb_filtered_ack;
 
 	/* extract the Diffserv Precedence field, if it exists */
 	/* and clear DSCP bits if washing */
@@ -1038,8 +937,7 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch, struct sk_buff *
 	if (skb_is_gso(skb)) {
 		struct sk_buff *segs, *nskb;
 		netdev_features_t features = netif_skb_features(skb);
-		// signed slen to handle corner case, uppressed ACK larger than trigger 
-		int slen = 0;
+		u32 slen = 0;
 		segs = skb_gso_segment(skb, features & ~NETIF_F_GSO_MASK);
 
 		if (IS_ERR_OR_NULL(segs))
@@ -1055,23 +953,14 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch, struct sk_buff *
 			qdisc_skb_cb(segs)->pkt_len = segs->len;
 			cobalt_set_enqueue_time(segs, now);
 			flow_queue_add(flow, segs);
-
-			if ((q->rate_flags & CAKE_FLAG_ACK_FILTER) &&
-			    (skb_filtered_ack = ack_filter(flow, segs))) {
-				b->ack_drops++;
-				slen += segs->len - skb_filtered_ack->len;
-				q->buffer_used += segs->truesize - skb_filtered_ack->truesize;
-				qdisc_tree_reduce_backlog(sch, 1, qdisc_pkt_len(skb_filtered_ack));
-				consume_skb(skb_filtered_ack);
-			} else {
-				sch->q.qlen++;
-				b->packets++;
-				slen += segs->len;
-				q->buffer_used += segs->truesize;
-			}
+			/* stats */
+			sch->q.qlen++;
+			b->packets++;
+			slen += segs->len;
+			q->buffer_used += segs->truesize;
 			segs = nskb;
 		}
-		/* stats */
+
 		b->bytes	    += slen;
 		b->backlogs[idx]    += slen;
 		b->tin_backlog      += slen;
@@ -1085,25 +974,15 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch, struct sk_buff *
 		cobalt_set_enqueue_time(skb, now);
 		flow_queue_add(flow, skb);
 
-		if ((q->rate_flags & CAKE_FLAG_ACK_FILTER) &&
-		    (skb_filtered_ack = ack_filter(flow, skb))) {
-		    	b->ack_drops++;
-			len -= qdisc_pkt_len(skb_filtered_ack);
-			q->buffer_used += skb->truesize - skb_filtered_ack->truesize;
-
-		    	qdisc_tree_reduce_backlog(sch, 1, qdisc_pkt_len(skb_filtered_ack));
-			consume_skb(skb_filtered_ack);
-		} else {
-			sch->q.qlen++;
-			b->packets++;
-			q->buffer_used      += skb->truesize;
-		}
 		/* stats */
+		sch->q.qlen++;
+		b->packets++;
 		b->bytes	    += len;
 		b->backlogs[idx]    += len;
 		b->tin_backlog      += len;
 		sch->qstats.backlog += len;
 		q->avg_window_bytes += len;
+		q->buffer_used      += skb->truesize;
 	}
 
 	if(q->overflow_timeout)
@@ -1494,8 +1373,7 @@ static const struct nla_policy cake_policy[TCA_CAKE_MAX + 1] = {
 	[TCA_CAKE_ETHERNET]      = { .type = NLA_U32 },
 	[TCA_CAKE_WASH]		 = { .type = NLA_U32 },
 	[TCA_CAKE_MPU]		 = { .type = NLA_U32 },
-	[TCA_CAKE_INGRESS]	 = { .type = NLA_U32 },
-	[TCA_CAKE_ACK_FILTER]	 = { .type = NLA_U32 },
+	[TCA_CAKE_INGRESS]		 = { .type = NLA_U32 },
 };
 
 static void cake_set_rate(struct cake_tin_data *b, u64 rate, u32 mtu,
@@ -1971,13 +1849,6 @@ static int cake_change(struct Qdisc *sch, struct nlattr *opt)
 			q->rate_flags &= ~CAKE_FLAG_INGRESS;
 	}
 
-	if (tb[TCA_CAKE_ACK_FILTER]) {
-		if (!!nla_get_u32(tb[TCA_CAKE_ACK_FILTER]))
-			q->rate_flags |= CAKE_FLAG_ACK_FILTER;
-		else
-			q->rate_flags &= ~CAKE_FLAG_ACK_FILTER;
-	}
-
 	if (tb[TCA_CAKE_MEMORY])
 		q->buffer_config_limit = nla_get_s32(tb[TCA_CAKE_MEMORY]);
 
@@ -2134,10 +2005,6 @@ static int cake_dump(struct Qdisc *sch, struct sk_buff *skb)
 			!!(q->rate_flags & CAKE_FLAG_INGRESS)))
 		goto nla_put_failure;
 
-	if (nla_put_u32(skb, TCA_CAKE_ACK_FILTER,
-			!!(q->rate_flags & CAKE_FLAG_ACK_FILTER)))
-		goto nla_put_failure;
-
 	if (nla_put_u32(skb, TCA_CAKE_MEMORY, q->buffer_config_limit))
 		goto nla_put_failure;
 
@@ -2159,7 +2026,7 @@ static int cake_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 
 	BUG_ON(q->tin_cnt > TC_CAKE_MAX_TINS);
 
-	st->version = 5;
+	st->version = 4;
 	st->max_tins = TC_CAKE_MAX_TINS;
 	st->tin_cnt = q->tin_cnt;
 
@@ -2176,7 +2043,6 @@ static int cake_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 		st->dropped[i].packets    = b->tin_dropped;
 		st->ecn_marked[i].packets = b->tin_ecn_mark;
 		st->backlog[i].bytes      = b->tin_backlog;
-		st->ack_drops[i].packets  = b->ack_drops;
 
 		st->peak_delay_us[i] = cobalt_time_to_us(b->peak_delay);
 		st->avge_delay_us[i] = cobalt_time_to_us(b->avge_delay);
