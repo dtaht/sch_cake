@@ -143,6 +143,7 @@ struct cake_flow {
 	/* this stuff is all needed per-flow at dequeue time */
 	struct sk_buff	  *head;
 	struct sk_buff	  *tail;
+	struct sk_buff	  *ackcheck;
 	struct list_head  flowchain;
 	s32		  deficit;
 	struct cobalt_vars cvars;
@@ -653,6 +654,9 @@ static inline struct sk_buff *dequeue_head(struct cake_flow *flow)
 	if(skb) {
 		flow->head = skb->next;
 		skb->next = NULL;
+
+		if (skb == flow->ackcheck)
+			flow->ackcheck = NULL;
 	}
 
 	return skb;
@@ -674,19 +678,19 @@ flow_queue_add(struct cake_flow *flow, struct sk_buff *skb)
 static struct sk_buff *ack_filter(struct cake_flow *flow, struct sk_buff *skb)
 {
 	int seglen;
-	struct sk_buff *skb_check, *skb_check_prev = NULL;
+	struct sk_buff *skb_check, *skb_check_prev, *rogue_ack = NULL;
 	struct iphdr *iph, *iph_check;
 	struct ipv6hdr *ipv6h, *ipv6h_check;
 	struct tcphdr *tcph, *tcph_check;
 
-	// no other possible ACKs to filter
+	/* no other possible ACKs to filter */
 	if (flow->head == skb)
 		return NULL;
 
 	iph = skb->encapsulation ? inner_ip_hdr(skb) : ip_hdr(skb);
 	ipv6h = skb->encapsulation ? inner_ipv6_hdr(skb) : ipv6_hdr(skb);
 
-	// check that the innermost network header is v4/v6, and contains TCP 
+	/* check that the innermost network header is v4/v6, and contains TCP */
 	if (iph->version == 4) {
 		if (iph->protocol != IPPROTO_TCP)
 			return NULL;
@@ -696,73 +700,121 @@ static struct sk_buff *ack_filter(struct cake_flow *flow, struct sk_buff *skb)
 		if (ipv6h->nexthdr != IPPROTO_TCP)
 			return NULL;
 		seglen = ntohs(ipv6h->payload_len);
-		tcph = (struct tcphdr *)((void *)ipv6h + sizeof(struct ipv6hdr));
+		tcph = (struct tcphdr *)((void *)ipv6h+sizeof(struct ipv6hdr));
 	} else {
 		return NULL;
 	}
 
-	// the 'triggering' packet need only have the ACK flag set
-	// also check that SYN is not set, as there won't be any previous ACKs
+	/* the 'triggering' packet need only have the ACK flag set.
+	 * also check that SYN is not set, as there won't be any previous ACKs.
+	 */
 	if ((tcp_flag_word(tcph) &
-		__constant_cpu_to_be32(0x00120000)) != TCP_FLAG_ACK)
+		cpu_to_be32(0x00120000)) != TCP_FLAG_ACK)
 		return NULL;
 
-	// the 'triggering' ACK is at the end of the queue
-	// we have already returned if it is the only packet
-	// iterate over everything from head of queue until second-to-last
-	skb_check = flow->head;
-	do {
-		iph_check = skb_check->encapsulation ? inner_ip_hdr(skb_check) : ip_hdr(skb_check);
-		ipv6h_check = skb_check->encapsulation ? inner_ipv6_hdr(skb_check) : ipv6_hdr(skb_check);
+	/* the 'triggering' ACK is at the end of the queue,
+	 * we have already returned if it is the only packet in the flow.
+	 * stop before last packet in queue, don't compare trigger ACK to itself
+	 * start where we finished last time if recorded in ->ackcheck
+	 * otherwise start from the the head of the flow queue.
+	 */
+	skb_check_prev = flow->ackcheck ?: NULL;
+	skb_check = flow->ackcheck ?: flow->head;
 
-		if (iph_check->version == 4 && iph->version == 4) {
-			if ((iph_check->protocol != IPPROTO_TCP) ||
-			    (iph_check->saddr != iph->saddr) ||
-			    (iph_check->daddr != iph->daddr)) {
+	while (skb_check->next) {
+		/* don't increment if at head of flow queue (_prev == NULL) */
+		if (skb_check_prev) {
+			skb_check_prev = skb_check;
+			skb_check = skb_check->next;
+			if (!skb_check->next)
+				break;
+		} else {
+			skb_check_prev = skb_check;
+		}
+
+		iph_check = skb_check->encapsulation ?
+			inner_ip_hdr(skb_check) : ip_hdr(skb_check);
+		ipv6h_check = skb_check->encapsulation ?
+			inner_ipv6_hdr(skb_check) : ipv6_hdr(skb_check);
+
+		if (iph_check->version == 4) {
+			if (iph_check->protocol != IPPROTO_TCP)
 				continue;
-			}
 			seglen = ntohs(iph_check->tot_len) - (4*iph_check->ihl);
-			tcph_check = (struct tcphdr *)((void *)iph_check + (4*iph_check->ihl));
-		} else if (ipv6h_check->version == 6 && ipv6h->version == 6) {
-			if ((ipv6h_check->nexthdr != IPPROTO_TCP) ||
-			    ipv6_addr_cmp(&ipv6h_check->saddr, &ipv6h->saddr) ||
-			    ipv6_addr_cmp(&ipv6h_check->daddr, &ipv6h->daddr)) {
+			tcph_check = (struct tcphdr *)((void *)iph_check
+				+ (4*iph_check->ihl));
+
+		} else if (ipv6h_check->version == 6) {
+			if (ipv6h_check->nexthdr != IPPROTO_TCP)
 				continue;
-			}
 			seglen = ntohs(ipv6h_check->payload_len);
-			tcph_check = (struct tcphdr *)((void *)ipv6h_check + sizeof(struct ipv6hdr));
+			tcph_check = (struct tcphdr *)((void *)ipv6h_check
+				+ sizeof(struct ipv6hdr));
+
 		} else {
 			continue;
 		}
 
-		// stricter criteria apply to ACKs that we may filter
-		// 3 reserved flags must be unset to avoid future breakage
-		// ECE/CWR/NS can be safely ignored
-		// ACK must be set
-		// All other flags URG/PSH/RST/SYN/FIN must be unset
-		// must be 'pure' ACK, contain zero bytes of segment data
-		// options are ignored
-		// new ack sequence must be greater
-		// equal DupACKs won't be filtered, would break fast recovery 
-		// SACKs won't be filtered as they look like DupACKs
+		/* stricter criteria apply to ACKs that we may filter
+		 * 3 reserved flags must be unset to avoid future breakage
+		 * ECE/CWR/NS can be safely ignored
+		 * ACK must be set
+		 * All other flags URG/PSH/RST/SYN/FIN must be unset
+		 * must be 'pure' ACK, contain zero bytes of segment data
+		 * options are ignored
+		 */
 		if (((tcp_flag_word(tcph_check) &
-			__constant_cpu_to_be32(0x0E3F0000)) != TCP_FLAG_ACK) ||
-		    ((seglen - 4*tcph_check->doff) != 0) ||
-		    (tcph_check->source != tcph->source) ||
-		    (tcph_check->dest != tcph->dest) ||
-		    (ntohl(tcph_check->ack_seq) >= ntohl(tcph->ack_seq))) {
+			cpu_to_be32(0x0E3F0000)) != TCP_FLAG_ACK) ||
+		    ((seglen - 4*tcph_check->doff) != 0)) {
 			continue;
 		}
 
-		if (flow->head == skb_check)
+		/* if the hosts or ports don't match, we have found a 'rogue'
+		 * ACK in this flow belonging to a different connection.
+		 * continue checking for other ACKs this round however
+		 * restart checking from the 'rogue' next time.
+		 */
+		if ((tcph_check->source != tcph->source) ||
+		    (tcph_check->dest != tcph->dest) ||
+		    (iph_check->version == 4 && iph->version == 4 &&
+			((iph_check->saddr != iph->saddr) ||
+			 (iph_check->daddr != iph->daddr))) ||
+		    (ipv6h_check->version == 6 && ipv6h->version == 6 &&
+			(ipv6_addr_cmp(&ipv6h_check->saddr, &ipv6h->saddr) ||
+			 ipv6_addr_cmp(&ipv6h_check->daddr, &ipv6h->daddr)))) {
+		/* very minor issue: if a 'rogue' ACK is seen at the head of
+		 * this flow queue it can never be filtered.
+		 * this is unlikely, and harmless.
+		 * solveable by assigning this case a sentinel rogue_ack value
+		 * not worth any extra effort or cpu cycles
+		 */
+			if (!rogue_ack && (skb_check != flow->head))
+				rogue_ack = skb_check_prev;
+			continue;
+		}
+
+		/* new ack sequence must be greater
+		 * equal DupACKs won't be filtered, would break fast retransmit
+		 * SACKs won't be filtered as they look like DupACKs
+		 * they won't be dropped either, safely reverts to unfiltered
+		 * specific handling and filtering of SACKs is possible
+		 * this is left as an exercise for the reader :)
+		 */
+		if (ntohl(tcph_check->ack_seq) >= ntohl(tcph->ack_seq))
+			continue;
+
+		if (skb_check == flow->head) {
 			flow->head = skb_check->next;
-		else
+			flow->ackcheck = NULL;
+		} else {
 			skb_check_prev->next = skb_check->next;
+			flow->ackcheck = rogue_ack ?: skb_check_prev;
+		}
 
 		return skb_check;
+	}
 
-	} while ((skb_check_prev = skb_check) && (skb_check = skb_check->next)->next);
-
+	flow->ackcheck = rogue_ack ?: skb_check_prev;
 	return NULL;
 }
 
@@ -985,10 +1037,10 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch, struct sk_buff *
 	u32 idx, tin;
 	struct cake_tin_data *b;
 	struct cake_flow *flow;
-	// signed len to handle corner case, suppressed ACK larger than trigger 
+	/* signed len to handle corner case filtered ACK larger than trigger */
 	int len = qdisc_pkt_len(skb);
 	u64 now = cobalt_get_time();
-	struct sk_buff *skb_filtered_ack;
+	struct sk_buff *skb_filtered_ack = NULL;
 
 	/* extract the Diffserv Precedence field, if it exists */
 	/* and clear DSCP bits if washing */
@@ -1038,7 +1090,9 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch, struct sk_buff *
 	if (skb_is_gso(skb)) {
 		struct sk_buff *segs, *nskb;
 		netdev_features_t features = netif_skb_features(skb);
-		// signed slen to handle corner case, uppressed ACK larger than trigger 
+		/* signed slen to handle corner case
+		 * suppressed ACK larger than trigger
+		 */
 		int slen = 0;
 		segs = skb_gso_segment(skb, features & ~NETIF_F_GSO_MASK);
 
@@ -1056,12 +1110,15 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch, struct sk_buff *
 			cobalt_set_enqueue_time(segs, now);
 			flow_queue_add(flow, segs);
 
-			if ((q->rate_flags & CAKE_FLAG_ACK_FILTER) &&
-			    (skb_filtered_ack = ack_filter(flow, segs))) {
+			if (q->rate_flags & CAKE_FLAG_ACK_FILTER)
+				skb_filtered_ack = ack_filter(flow, segs);
+			if (skb_filtered_ack) {
 				b->ack_drops++;
 				slen += segs->len - skb_filtered_ack->len;
-				q->buffer_used += segs->truesize - skb_filtered_ack->truesize;
-				qdisc_tree_reduce_backlog(sch, 1, qdisc_pkt_len(skb_filtered_ack));
+				q->buffer_used += segs->truesize
+					- skb_filtered_ack->truesize;
+				qdisc_tree_reduce_backlog(sch, 1,
+					qdisc_pkt_len(skb_filtered_ack));
 				consume_skb(skb_filtered_ack);
 			} else {
 				sch->q.qlen++;
@@ -1085,13 +1142,15 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch, struct sk_buff *
 		cobalt_set_enqueue_time(skb, now);
 		flow_queue_add(flow, skb);
 
-		if ((q->rate_flags & CAKE_FLAG_ACK_FILTER) &&
-		    (skb_filtered_ack = ack_filter(flow, skb))) {
-		    	b->ack_drops++;
+		if (q->rate_flags & CAKE_FLAG_ACK_FILTER)
+			skb_filtered_ack = ack_filter(flow, skb);
+		if (skb_filtered_ack) {
+			b->ack_drops++;
 			len -= qdisc_pkt_len(skb_filtered_ack);
-			q->buffer_used += skb->truesize - skb_filtered_ack->truesize;
-
-		    	qdisc_tree_reduce_backlog(sch, 1, qdisc_pkt_len(skb_filtered_ack));
+			q->buffer_used += skb->truesize
+				- skb_filtered_ack->truesize;
+			qdisc_tree_reduce_backlog(sch, 1,
+				qdisc_pkt_len(skb_filtered_ack));
 			consume_skb(skb_filtered_ack);
 		} else {
 			sch->q.qlen++;

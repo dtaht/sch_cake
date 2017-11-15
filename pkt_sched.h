@@ -913,7 +913,7 @@ struct tc_cake_xstats {
 	__u32 capacity_estimate;  /* version 2 */
 	__u32 memory_limit;       /* version 3 */
 	__u32 memory_used;	  /* version 3 */
-	struct tc_cake_traffic_stats ack_drops [TC_CAKE_MAX_TINS]; /* version 5 */
+	struct tc_cake_traffic_stats ack_drops[TC_CAKE_MAX_TINS]; /* v5 */
 };
 
 #endif
