@@ -276,7 +276,8 @@ enum {
 	CAKE_FLAG_AUTORATE_INGRESS = 0x0010,
 	CAKE_FLAG_INGRESS = 0x0040,
 	CAKE_FLAG_WASH = 0x0100,
-	CAKE_FLAG_ACK_FILTER = 0x0200
+	CAKE_FLAG_ACK_FILTER = 0x0200,
+	CAKE_FLAG_ACK_AGGRESSIVE = 0x0400
 };
 
 enum {
@@ -675,15 +676,15 @@ flow_queue_add(struct cake_flow *flow, struct sk_buff *skb)
 	skb->next = NULL;
 }
 
-static struct sk_buff *ack_filter(struct cake_flow *flow, struct sk_buff *skb)
+static struct sk_buff *ack_filter(struct cake_flow *flow, bool aggressive)
 {
 	int seglen;
-	struct sk_buff *skb_check, *skb_check_prev;
+	struct sk_buff *skb = flow->tail, *skb_check, *skb_check_prev;
 	struct iphdr *iph, *iph_check;
 	struct ipv6hdr *ipv6h, *ipv6h_check;
 	struct tcphdr *tcph, *tcph_check;
 
-	bool otherconn_ack_seen = false, aggressive = false;
+	bool otherconn_ack_seen = false;
 	struct sk_buff *otherconn_checked_to = NULL;
 	bool thisconn_redundant_seen = false, thisconn_seen_last = false;
 	struct sk_buff *thisconn_checked_to = NULL, *thisconn_ack = NULL;
@@ -1203,12 +1204,17 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch, struct sk_buff *
 			flow_queue_add(flow, segs);
 
 			if (q->rate_flags & CAKE_FLAG_ACK_FILTER)
-				skb_filtered_ack = ack_filter(flow, segs);
+				skb_filtered_ack = ack_filter(flow,
+				    (q->rate_flags & CAKE_FLAG_ACK_AGGRESSIVE));
 			if (skb_filtered_ack) {
 				b->ack_drops++;
 				slen += segs->len - skb_filtered_ack->len;
 				q->buffer_used += segs->truesize
 					- skb_filtered_ack->truesize;
+				if (q->rate_flags & CAKE_FLAG_INGRESS)
+					cake_advance_shaper(q, b,
+					cake_overhead(q, skb_filtered_ack->len),
+						now);
 				qdisc_tree_reduce_backlog(sch, 1,
 					qdisc_pkt_len(skb_filtered_ack));
 				consume_skb(skb_filtered_ack);
@@ -1235,12 +1241,17 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch, struct sk_buff *
 		flow_queue_add(flow, skb);
 
 		if (q->rate_flags & CAKE_FLAG_ACK_FILTER)
-			skb_filtered_ack = ack_filter(flow, skb);
+			skb_filtered_ack = ack_filter(flow,
+				(q->rate_flags & CAKE_FLAG_ACK_AGGRESSIVE));
 		if (skb_filtered_ack) {
 			b->ack_drops++;
 			len -= qdisc_pkt_len(skb_filtered_ack);
 			q->buffer_used += skb->truesize
 				- skb_filtered_ack->truesize;
+			if(q->rate_flags & CAKE_FLAG_INGRESS)
+				cake_advance_shaper(q, b,
+					cake_overhead(q, skb_filtered_ack->len),
+					now);
 			qdisc_tree_reduce_backlog(sch, 1,
 				qdisc_pkt_len(skb_filtered_ack));
 			consume_skb(skb_filtered_ack);
@@ -2123,10 +2134,14 @@ static int cake_change(struct Qdisc *sch, struct nlattr *opt)
 	}
 
 	if (tb[TCA_CAKE_ACK_FILTER]) {
-		if (!!nla_get_u32(tb[TCA_CAKE_ACK_FILTER]))
+		q->rate_flags &= ~(CAKE_FLAG_ACK_FILTER | CAKE_FLAG_ACK_AGGRESSIVE);
+		/* maintain compatibility with tc's behaviour for about a week
+		 * probably remove special case if mainlining
+		 */
+		if (nla_get_u32(tb[TCA_CAKE_ACK_FILTER]) == 1)
 			q->rate_flags |= CAKE_FLAG_ACK_FILTER;
 		else
-			q->rate_flags &= ~CAKE_FLAG_ACK_FILTER;
+			q->rate_flags |= nla_get_u32(tb[TCA_CAKE_ACK_FILTER]) & (CAKE_FLAG_ACK_FILTER | CAKE_FLAG_ACK_AGGRESSIVE);
 	}
 
 	if (tb[TCA_CAKE_MEMORY])
@@ -2286,7 +2301,7 @@ static int cake_dump(struct Qdisc *sch, struct sk_buff *skb)
 		goto nla_put_failure;
 
 	if (nla_put_u32(skb, TCA_CAKE_ACK_FILTER,
-			!!(q->rate_flags & CAKE_FLAG_ACK_FILTER)))
+			(q->rate_flags & (CAKE_FLAG_ACK_FILTER | CAKE_FLAG_ACK_AGGRESSIVE))))
 		goto nla_put_failure;
 
 	if (nla_put_u32(skb, TCA_CAKE_MEMORY, q->buffer_config_limit))
