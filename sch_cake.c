@@ -678,10 +678,15 @@ flow_queue_add(struct cake_flow *flow, struct sk_buff *skb)
 static struct sk_buff *ack_filter(struct cake_flow *flow, struct sk_buff *skb)
 {
 	int seglen;
-	struct sk_buff *skb_check, *skb_check_prev, *rogue_ack = NULL;
+	struct sk_buff *skb_check, *skb_check_prev;
 	struct iphdr *iph, *iph_check;
 	struct ipv6hdr *ipv6h, *ipv6h_check;
 	struct tcphdr *tcph, *tcph_check;
+
+	bool otherconn_ack_seen = false, aggressive = false;
+	struct sk_buff *otherconn_checked_to = NULL;
+	bool thisconn_redundant_seen = false, thisconn_seen_last = false;
+	struct sk_buff *thisconn_checked_to = NULL, *thisconn_ack = NULL;
 
 	/* no other possible ACKs to filter */
 	if (flow->head == skb)
@@ -718,10 +723,12 @@ static struct sk_buff *ack_filter(struct cake_flow *flow, struct sk_buff *skb)
 	 * start where we finished last time if recorded in ->ackcheck
 	 * otherwise start from the the head of the flow queue.
 	 */
-	skb_check_prev = flow->ackcheck ?: NULL;
+	skb_check_prev = flow->ackcheck;
 	skb_check = flow->ackcheck ?: flow->head;
 
 	while (skb_check->next) {
+		bool pure_ack, thisconn;
+
 		/* don't increment if at head of flow queue (_prev == NULL) */
 		if (skb_check_prev) {
 			skb_check_prev = skb_check;
@@ -729,7 +736,7 @@ static struct sk_buff *ack_filter(struct cake_flow *flow, struct sk_buff *skb)
 			if (!skb_check->next)
 				break;
 		} else {
-			skb_check_prev = skb_check;
+			skb_check_prev = ERR_PTR(-1);
 		}
 
 		iph_check = skb_check->encapsulation ?
@@ -743,14 +750,26 @@ static struct sk_buff *ack_filter(struct cake_flow *flow, struct sk_buff *skb)
 			seglen = ntohs(iph_check->tot_len) - (4*iph_check->ihl);
 			tcph_check = (struct tcphdr *)((void *)iph_check
 				+ (4*iph_check->ihl));
-
+			if ((iph->version == 4) &&
+			    (iph_check->saddr == iph->saddr) &&
+			    (iph_check->daddr == iph->daddr)) {
+				thisconn = true;
+			} else {
+				thisconn = false;
+			}
 		} else if (ipv6h_check->version == 6) {
 			if (ipv6h_check->nexthdr != IPPROTO_TCP)
 				continue;
 			seglen = ntohs(ipv6h_check->payload_len);
 			tcph_check = (struct tcphdr *)((void *)ipv6h_check
 				+ sizeof(struct ipv6hdr));
-
+			if ((ipv6h->version == 6) &&
+			    ipv6_addr_cmp(&ipv6h_check->saddr, &ipv6h->saddr) &&
+			    ipv6_addr_cmp(&ipv6h_check->daddr, &ipv6h->daddr)) {
+				thisconn = true;
+			} else {
+				thisconn = false;
+			}
 		} else {
 			continue;
 		}
@@ -763,34 +782,25 @@ static struct sk_buff *ack_filter(struct cake_flow *flow, struct sk_buff *skb)
 		 * must be 'pure' ACK, contain zero bytes of segment data
 		 * options are ignored
 		 */
-		if (((tcp_flag_word(tcph_check) &
-			cpu_to_be32(0x0E3F0000)) != TCP_FLAG_ACK) ||
-		    ((seglen - 4*tcph_check->doff) != 0)) {
+		if ((tcp_flag_word(tcph) &
+			cpu_to_be32(0x00120000)) != TCP_FLAG_ACK) {
 			continue;
+		} else if (((tcp_flag_word(tcph_check) &
+				cpu_to_be32(0x0E3F0000)) != TCP_FLAG_ACK) ||
+			   ((seglen - 4*tcph_check->doff) != 0)) {
+			pure_ack = false;
+		} else {
+			pure_ack = true;
 		}
 
-		/* if the hosts or ports don't match, we have found a 'rogue'
-		 * ACK in this flow belonging to a different connection.
+		/* if we find an ACK belonging to a different connection
 		 * continue checking for other ACKs this round however
-		 * restart checking from the 'rogue' next time.
+		 * restart checking from the other connection next time.
 		 */
-		if ((tcph_check->source != tcph->source) ||
-		    (tcph_check->dest != tcph->dest) ||
-		    (iph_check->version == 4 && iph->version == 4 &&
-			((iph_check->saddr != iph->saddr) ||
-			 (iph_check->daddr != iph->daddr))) ||
-		    (ipv6h_check->version == 6 && ipv6h->version == 6 &&
-			(ipv6_addr_cmp(&ipv6h_check->saddr, &ipv6h->saddr) ||
-			 ipv6_addr_cmp(&ipv6h_check->daddr, &ipv6h->daddr)))) {
-		/* very minor issue: if a 'rogue' ACK is seen at the head of
-		 * this flow queue it can never be filtered.
-		 * this is unlikely, and harmless.
-		 * solveable by assigning this case a sentinel rogue_ack value
-		 * not worth any extra effort or cpu cycles
-		 */
-			if (!rogue_ack && (skb_check != flow->head))
-				rogue_ack = skb_check_prev;
-			continue;
+		if (thisconn &&
+			((tcph_check->source != tcph->source) ||
+			 (tcph_check->dest != tcph->dest))) {
+			thisconn = false;
 		}
 
 		/* new ack sequence must be greater
@@ -800,22 +810,104 @@ static struct sk_buff *ack_filter(struct cake_flow *flow, struct sk_buff *skb)
 		 * specific handling and filtering of SACKs is possible
 		 * this is left as an exercise for the reader :)
 		 */
-		if (ntohl(tcph_check->ack_seq) >= ntohl(tcph->ack_seq))
+		if (thisconn &&
+		    (ntohl(tcph_check->ack_seq) >= ntohl(tcph->ack_seq)))
 			continue;
 
-		if (skb_check == flow->head) {
-			flow->head = skb_check->next;
-			flow->ackcheck = NULL;
-		} else {
-			skb_check_prev->next = skb_check->next;
-			flow->ackcheck = rogue_ack ?: skb_check_prev;
+		/* somewhat complicated control flow for 'conservative'
+		 * ACK filtering that aims to be more polite to slow-start and
+		 * in the presence of packet loss.
+		 * does not filter if there is one 'redundant' ACK in the queue.
+		 * 'data' ACKs won't be filtered but do count as redundant ACKs.
+		 */
+		if (thisconn) {
+			thisconn_seen_last = true;
+			/* if aggressive and this is a data ack we can skip
+			 * checking it next time.
+			 */
+			thisconn_checked_to = (aggressive && !pure_ack) ?
+				skb_check : skb_check_prev;
+			/* the first pure ack for this connection.
+			 * record where it is, but only break if aggressive
+			 * or already seen data ack from the same connection
+			 */
+			if (pure_ack && !thisconn_ack) {
+				thisconn_ack = skb_check_prev;
+				if (aggressive || thisconn_redundant_seen)
+					break;
+			/* data ack or subsequent pure ack */
+			} else {
+				thisconn_redundant_seen = true;
+				/* this is the second ack for this connection
+				 * break to filter the first pure ack
+				 */
+				if (thisconn_ack)
+					break;
+			}
+		/* track packets from non-matching tcp connections that will
+		 * need evaluation on the next run.
+		 * if there are packets from both the matching connection and
+		 * others that requre checking next run, track which was updated
+		 * last and return the older of the two to ensure full coverage.
+		 * if a non-matching pure ack has been seen, cannot skip any
+		 * further on the next run so don't update.
+		 */
+		} else if (!otherconn_ack_seen) {
+			thisconn_seen_last = false;
+			if (pure_ack) {
+				otherconn_ack_seen = true;
+				/* if aggressive we don't care about old data,
+				 * start from the pure ack.
+				 * otherwise if there is a previous data ack,
+				 * start checking from it next time.
+				 */
+				if (aggressive || !otherconn_checked_to)
+					otherconn_checked_to = skb_check_prev;
+			} else {
+				otherconn_checked_to = aggressive ?
+					skb_check : skb_check_prev;
+			}
 		}
-
-		return skb_check;
 	}
 
-	flow->ackcheck = rogue_ack ?: skb_check_prev;
-	return NULL;
+	/* skb_check is reused at this point
+	 * it is the pure ACK to be filtered (if any)
+	 */
+	skb_check = NULL;
+
+	/* next time start checking from the older/nearest to head of unfiltered
+	 * but important tcp packets from this connection and other connections.
+	 * if none seen, start after the last packet evaluated in the loop.
+	 */
+	if (thisconn_checked_to && otherconn_checked_to)
+		flow->ackcheck = thisconn_seen_last ?
+			otherconn_checked_to : thisconn_checked_to;
+	else if (thisconn_checked_to)
+		flow->ackcheck = thisconn_checked_to;
+	else if (otherconn_checked_to)
+		flow->ackcheck = otherconn_checked_to;
+	else
+		flow->ackcheck = skb_check_prev;
+
+	/* if filtering, the pure ACK from the flow queue */
+	if (thisconn_ack && (aggressive || thisconn_redundant_seen)) {
+		if (PTR_ERR(thisconn_ack) == -1) {
+			skb_check = flow->head;
+			flow->head = flow->head->next;
+		} else {
+			skb_check = thisconn_ack->next;
+			thisconn_ack->next = thisconn_ack->next->next;
+		}
+	}
+
+	/* we just filtered that ack, fix up the list */
+	if (flow->ackcheck == skb_check)
+		flow->ackcheck = thisconn_ack;
+	/* check the entire flow queue next time */
+	if (PTR_ERR(flow->ackcheck) == -1)
+		flow->ackcheck = NULL;
+
+	return skb_check;
 }
 
 static inline u32 cake_overhead(struct cake_sched_data *q, u32 in)
