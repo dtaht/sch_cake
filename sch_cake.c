@@ -1239,6 +1239,7 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch, struct sk_buff *
 				    (q->rate_flags & CAKE_FLAG_ACK_AGGRESSIVE));
 			if (skb_filtered_ack) {
 				b->ack_drops++;
+				b->bytes += skb_filtered_ack->len;
 				slen += segs->len - skb_filtered_ack->len;
 				q->buffer_used += segs->truesize
 					- skb_filtered_ack->truesize;
@@ -1251,10 +1252,10 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch, struct sk_buff *
 				consume_skb(skb_filtered_ack);
 			} else {
 				sch->q.qlen++;
-				b->packets++;
 				slen += segs->len;
 				q->buffer_used += segs->truesize;
 			}
+			b->packets++;
 			segs = nskb;
 		}
 		/* stats */
@@ -1276,6 +1277,7 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch, struct sk_buff *
 				(q->rate_flags & CAKE_FLAG_ACK_AGGRESSIVE));
 		if (skb_filtered_ack) {
 			b->ack_drops++;
+			b->bytes += qdisc_pkt_len(skb_filtered_ack);
 			len -= qdisc_pkt_len(skb_filtered_ack);
 			q->buffer_used += skb->truesize
 				- skb_filtered_ack->truesize;
@@ -1288,10 +1290,10 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch, struct sk_buff *
 			consume_skb(skb_filtered_ack);
 		} else {
 			sch->q.qlen++;
-			b->packets++;
 			q->buffer_used      += skb->truesize;
 		}
 		/* stats */
+		b->packets++;
 		b->bytes	    += len;
 		b->backlogs[idx]    += len;
 		b->tin_backlog      += len;
