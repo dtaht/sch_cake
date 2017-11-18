@@ -57,6 +57,7 @@
 #include <linux/version.h>
 #include "pkt_sched.h"
 #include <linux/if_vlan.h>
+#include <net/tcp.h>
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 2, 0)
 #include <net/flow_keys.h>
 #else
@@ -805,15 +806,45 @@ static struct sk_buff *ack_filter(struct cake_flow *flow, bool aggressive)
 		}
 
 		/* new ack sequence must be greater
-		 * equal DupACKs won't be filtered, would break fast retransmit
-		 * SACKs won't be filtered as they look like DupACKs
-		 * they won't be dropped either, safely reverts to unfiltered
-		 * specific handling and filtering of SACKs is possible
-		 * this is left as an exercise for the reader :)
 		 */
 		if (thisconn &&
-		    (ntohl(tcph_check->ack_seq) >= ntohl(tcph->ack_seq)))
+		    (ntohl(tcph_check->ack_seq) > ntohl(tcph->ack_seq)))
 			continue;
+
+
+		/* DupACKs with an equal sequence number shouldn't be filtered,
+		 * but we can filter if the triggering packet is a SACK
+		 */
+		if (thisconn &&
+		    (ntohl(tcph_check->ack_seq) == ntohl(tcph->ack_seq))) {
+		    	/* inspired by tcp_parse_options in tcp_input.c */
+		    	bool sack = false;
+			int length = (tcph->doff * 4) - sizeof(struct tcphdr);
+			const unsigned char *ptr =
+					(const unsigned char *)(tcph + 1); 
+			while (length > 0) {
+				int opcode = *ptr++;
+				int opsize;
+
+				if (opcode == TCPOPT_EOL)
+					break;
+				if (opcode == TCPOPT_NOP) {
+					length--;
+					continue;
+				}
+				opsize = *ptr++;
+				if ((opsize < 2) || (opsize > length))
+					break;
+				if (opcode == TCPOPT_SACK) {
+					sack = true;
+					break;
+				}
+				ptr += opsize-2;
+				length -= opsize;
+			}
+			if (!sack)
+				continue;
+		}
 
 		/* somewhat complicated control flow for 'conservative'
 		 * ACK filtering that aims to be more polite to slow-start and
