@@ -6,7 +6,7 @@
  *
  *  Copyright (C) 2011-2012 Kathleen Nichols <nichols@pollere.com>
  *  Copyright (C) 2011-2012 Van Jacobson <van@pollere.net>
- *  Copyright (C) 2016 Michael D. Taht <dave.taht@bufferbloat.net>
+ *  Copyright (C) 2012-2017 Michael D. Täht <dave.taht@gmail.com>
  *  Copyright (C) 2012 Eric Dumazet <edumazet@google.com>
  *  Copyright (C) 2015 Jonathan Morton <chromatix99@gmail.com>
  *
@@ -55,7 +55,7 @@
  * Source : Kathleen Nichols and Van Jacobson
  * http://queue.acm.org/detail.cfm?id=2209336
  *
- * Implemented on linux by Dave Taht and Eric Dumazet
+ * Implemented on linux by Dave Täht and Eric Dumazet
  */
 
 #if KERNEL_VERSION(3, 18, 0) > LINUX_VERSION_CODE
@@ -153,12 +153,12 @@ static void codel_vars_init(struct codel_vars *vars)
 }
 
 /*
- * http://en.wikipedia.org/wiki/Methods_of_computing_square_roots#Iterative_methods_for_reciprocal_square_roots
- * new_invsqrt = (invsqrt / 2) * (3 - count * invsqrt^2)
+ * http://en.wikipedia.org/wiki/Methods_of_computing_square_roots
+ * new_invsqrt = (invsqrt / 2) * (3 - count * newton_stsqrt^2)
  *
  * Here, invsqrt is a fixed point number (< 1.0), 32bit mantissa, aka Q0.32
  */
-static void codel_Newton_step(struct codel_vars *vars)
+static void codel_newton_step(struct codel_vars *vars)
 {
 	if (vars->count < REC_INV_SQRT_CACHE &&
 	   likely(codel_rec_inv_sqrt_cache[vars->count])) {
@@ -184,10 +184,10 @@ static void codel_cache_init(void)
 	codel_rec_inv_sqrt_cache[0] = v.rec_inv_sqrt;
 
 	for (v.count = 1; v.count < REC_INV_SQRT_CACHE; v.count++) {
-		codel_Newton_step(&v);
-		codel_Newton_step(&v);
-		codel_Newton_step(&v);
-		codel_Newton_step(&v);
+		codel_newton_step(&v);
+		codel_newton_step(&v);
+		codel_newton_step(&v);
+		codel_newton_step(&v);
 
 		codel_rec_inv_sqrt_cache[v.count] = v.rec_inv_sqrt;
 	}
@@ -234,7 +234,9 @@ static bool codel_should_drop(const struct sk_buff *skb,
 		/* just went above from below; mark the time */
 		vars->first_above_time = now;
 	} else if (overloaded) {
-		/* this flag is set if the pending queue cannot be cleared within interval */
+		/* this flag is set if the pending queue cannot be cleared
+		 * within interval
+		 */
 		return true;
 	} else if (vars->count > 1 && now - vars->drop_next < 8 * p->interval) {
 		/* we were recently dropping; be more aggressive */
@@ -286,7 +288,7 @@ static struct sk_buff *codel_dequeue(struct Qdisc *sch,
 			if (!vars->count)
 				vars->count--;
 
-			codel_Newton_step(vars);
+			codel_newton_step(vars);
 			vars->drop_next = codel_control_law(vars->drop_next,
 							    p->interval,
 							    vars->rec_inv_sqrt);
@@ -303,7 +305,8 @@ static struct sk_buff *codel_dequeue(struct Qdisc *sch,
 				vars->drop_count++;
 				skb = custom_dequeue(vars, sch);
 				if (skb && !codel_should_drop(skb, sch, vars,
-							      p, now, overloaded)) {
+							      p, now,
+							      overloaded)) {
 					/* leave dropping state */
 					vars->dropping = false;
 				} else {
@@ -327,7 +330,8 @@ static struct sk_buff *codel_dequeue(struct Qdisc *sch,
 			vars->drop_count++;
 
 			skb = custom_dequeue(vars, sch);
-			drop = codel_should_drop(skb, sch, vars, p, now, overloaded);
+			drop = codel_should_drop(skb, sch, vars, p,
+						 now, overloaded);
 			if (skb && INET_ECN_set_ce(skb))
 				vars->ecn_mark++;
 		}
@@ -348,7 +352,7 @@ static struct sk_buff *codel_dequeue(struct Qdisc *sch,
 			vars->count = 1;
 			vars->rec_inv_sqrt = ~0U >> REC_INV_SQRT_SHIFT;
 		}
-		codel_Newton_step(vars);
+		codel_newton_step(vars);
 		vars->drop_next = codel_control_law(now, p->interval,
 						    vars->rec_inv_sqrt);
 	}
