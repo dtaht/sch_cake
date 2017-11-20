@@ -953,7 +953,7 @@ static inline u32 cake_overhead(struct cake_sched_data *q, u32 in)
 		 * This is conservative and easier to calculate than the
 		 * precise value.
 		 */
-		out += (out / 64) + !!(out % 64);
+		out += (out+63) / 64;
 	}
 
 	return out;
