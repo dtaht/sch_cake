@@ -1247,7 +1247,7 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 				    cake_advance_shaper(q, b,
 							cake_overhead(q,
 								      skb_filtered_ack->len),
-							now);
+							now, true);
 				qdisc_tree_reduce_backlog(sch, 1,
 							  qdisc_pkt_len(skb_filtered_ack));
 				consume_skb(skb_filtered_ack);
@@ -1286,7 +1286,7 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 				cake_advance_shaper(q, b,
 						    cake_overhead(q,
 								  skb_filtered_ack->len),
-						    now);
+						    now, true);
 			qdisc_tree_reduce_backlog(sch, 1,
 						  qdisc_pkt_len(skb_filtered_ack));
 			consume_skb(skb_filtered_ack);
