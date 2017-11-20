@@ -1684,7 +1684,7 @@ static void cake_advance_shaper(struct cake_sched_data *q,
 		s64 tdiff1 = b->tin_time_next_packet - now;
 		s64 tdiff2 = (len * (u64)b->tin_rate_ns) >> b->tin_rate_shft;
 		s64 tdiff3 = (len * (u64)q->rate_ns) >> q->rate_shft;
-		s64 tdiff4 = (len * (u64)q->rate_ns) >> (q->rate_shft - 2);
+		s64 tdiff4 = tdiff3 + (tdiff3 >> 1);
 
 		if (tdiff1 < 0)
 			b->tin_time_next_packet += tdiff2;
