@@ -1,13 +1,12 @@
 #ifndef __NET_SCHED_COBALT_H
 #define __NET_SCHED_COBALT_H
 
-/*
- * COBALT - Codel-BLUE Alternate AQM algorithm.
+/* COBALT - Codel-BLUE Alternate AQM algorithm.
  *
  *  Copyright (C) 2011-2012 Kathleen Nichols <nichols@pollere.com>
  *  Copyright (C) 2011-2012 Van Jacobson <van@pollere.net>
  *  Copyright (C) 2012 Eric Dumazet <edumazet@google.com>
- *  Copyright (C) 2016 Michael D. Taht <dave.taht@bufferbloat.net>
+ *  Copyright (C) 2016 Michael D. Täht <dave.taht@gmail.com>
  *  Copyright (c) 2015-2016 Jonathan Morton <chromatix99@gmail.com>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -119,10 +118,14 @@ struct cobalt_skb_cb *get_cobalt_cb(const struct sk_buff *skb);
 cobalt_time_t cobalt_get_enqueue_time(const struct sk_buff *skb);
 
 /* Call this when a packet had to be dropped due to queue overflow. */
-bool cobalt_queue_full(struct cobalt_vars *vars, struct cobalt_params *p, cobalt_time_t now);
+bool cobalt_queue_full(struct cobalt_vars *vars,
+		       struct cobalt_params *p,
+		       cobalt_time_t now);
 
 /* Call this when the queue was serviced but turned out to be empty. */
-bool cobalt_queue_empty(struct cobalt_vars *vars, struct cobalt_params *p, cobalt_time_t now);
+bool cobalt_queue_empty(struct cobalt_vars *vars,
+			struct cobalt_params *p,
+			cobalt_time_t now);
 
 /* Call this with a freshly dequeued packet for possible congestion marking.
  * Returns true as an instruction to drop the packet, false for delivery.
