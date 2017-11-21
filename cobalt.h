@@ -40,6 +40,12 @@
  * DAMAGE.
  */
 
+/* COBALT operates the Codel and BLUE algorithms in parallel, in order to
+ * obtain the best features of each.  Codel is excellent on flows which
+ * respond to congestion signals in a TCP-like way.  BLUE is more effective on
+ * unresponsive flows.
+ */
+
 #include <linux/version.h>
 #include <linux/types.h>
 #include <linux/ktime.h>
@@ -53,19 +59,6 @@ typedef s64 cobalt_tdiff_t;
 
 #define MS2TIME(a) (a * (u64) NSEC_PER_MSEC)
 #define US2TIME(a) (a * (u64) NSEC_PER_USEC)
-
-#define codel_stats_copy_queue(a, b, c, d) gnet_stats_copy_queue(a, b, c, d)
-#define codel_watchdog_schedule_ns(a, b, c) qdisc_watchdog_schedule_ns(a, b, c)
-
-#if KERNEL_VERSION(3, 18, 0) > LINUX_VERSION_CODE
-#include "codel5_compat.h"
-#endif
-
-/* COBALT operates the Codel and BLUE algorithms in parallel, in order to
- * obtain the best features of each.  Codel is excellent on flows which
- * respond to congestion signals in a TCP-like way.  BLUE is more effective on
- * unresponsive flows.
- */
 
 struct cobalt_skb_cb {
 	cobalt_time_t enqueue_time;
