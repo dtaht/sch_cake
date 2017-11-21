@@ -321,24 +321,24 @@ static const u8 diffserv8[] = {2, 5, 1, 2, 4, 2, 2, 2,
 				7, 2, 2, 2, 2, 2, 2, 2,
 				};
 
-static const u8 diffserv4[] = {1, 2, 1, 1, 2, 1, 1, 1,
-			       0, 1, 1, 1, 1, 1, 1, 1,
-				2, 1, 2, 1, 2, 1, 2, 1,
-				2, 1, 2, 1, 2, 1, 2, 1,
-				3, 1, 2, 1, 2, 1, 2, 1,
-				3, 1, 1, 1, 3, 1, 3, 1,
-				3, 1, 1, 1, 1, 1, 1, 1,
-				3, 1, 1, 1, 1, 1, 1, 1,
+static const u8 diffserv4[] = {0, 2, 0, 0, 2, 0, 0, 0,
+			       1, 0, 0, 0, 0, 0, 0, 0,
+				2, 0, 2, 0, 2, 0, 2, 0,
+				2, 0, 2, 0, 2, 0, 2, 0,
+				3, 0, 2, 0, 2, 0, 2, 0,
+				3, 0, 0, 0, 3, 0, 3, 0,
+				3, 0, 0, 0, 0, 0, 0, 0,
+				3, 0, 0, 0, 0, 0, 0, 0,
 				};
 
-static const u8 diffserv3[] = {1, 1, 1, 1, 2, 1, 1, 1,
-			       0, 1, 1, 1, 1, 1, 1, 1,
-				1, 1, 1, 1, 1, 1, 1, 1,
-				1, 1, 1, 1, 1, 1, 1, 1,
-				1, 1, 1, 1, 1, 1, 1, 1,
-				1, 1, 1, 1, 2, 1, 2, 1,
-				2, 1, 1, 1, 1, 1, 1, 1,
-				2, 1, 1, 1, 1, 1, 1, 1,
+static const u8 diffserv3[] = {0, 0, 0, 0, 2, 0, 0, 0,
+			       1, 0, 0, 0, 0, 0, 0, 0,
+				0, 0, 0, 0, 0, 0, 0, 0,
+				0, 0, 0, 0, 0, 0, 0, 0,
+				0, 0, 0, 0, 0, 0, 0, 0,
+				0, 0, 0, 0, 2, 0, 2, 0,
+				2, 0, 0, 0, 0, 0, 0, 0,
+				2, 0, 0, 0, 0, 0, 0, 0,
 				};
 
 static const u8 besteffort[] = {0, 0, 0, 0, 0, 0, 0, 0,
@@ -351,7 +351,8 @@ static const u8 besteffort[] = {0, 0, 0, 0, 0, 0, 0, 0,
 				0, 0, 0, 0, 0, 0, 0, 0,
 				};
 
-/* tin priority order, ascending */
+/* tin priority order for stats dumping only, for backwards */
+/* compatibility with tc */
 static const u8 normal_order[] = {0, 1, 2, 3, 4, 5, 6, 7};
 static const u8 bulk_order[] = {1, 0, 2, 3};
 
@@ -1501,12 +1502,10 @@ begin:
 		 * - Highest-priority tin with queue and meeting schedule, or
 		 * - The earliest-scheduled tin with queue.
 		 */
-		int oi, best_tin = 0;
+		int tin, best_tin=0;
 		s64 best_time = 0xFFFFFFFFFFFFUL;
 
-		for (oi = 0; oi < q->tin_cnt; oi++) {
-			int tin = q->tin_order[oi];
-
+		for(tin=0; tin < q->tin_cnt; tin++) {
 			b = q->tins + tin;
 			if ((b->sparse_flow_count + b->bulk_flow_count) > 0) {
 				s64 tdiff = b->tin_time_next_packet - now;
@@ -1934,9 +1933,9 @@ static int cake_config_diffserv4(struct Qdisc *sch)
 	q->tin_order = bulk_order;
 
 	/* class characteristics */
-	cake_set_rate(&q->tins[0], rate >> 4, mtu,
+	cake_set_rate(&q->tins[0], rate, mtu,
 		      US2TIME(q->target), US2TIME(q->interval));
-	cake_set_rate(&q->tins[1], rate, mtu,
+	cake_set_rate(&q->tins[1], rate >> 4, mtu,
 		      US2TIME(q->target), US2TIME(q->interval));
 	cake_set_rate(&q->tins[2], rate >> 1, mtu,
 		      US2TIME(q->target), US2TIME(q->interval));
@@ -1944,19 +1943,18 @@ static int cake_config_diffserv4(struct Qdisc *sch)
 		      US2TIME(q->target), US2TIME(q->interval));
 
 	/* priority weights */
-	q->tins[0].tin_quantum_prio = quantum >> 4;
-	q->tins[1].tin_quantum_prio = quantum;
+	q->tins[0].tin_quantum_prio = quantum;
+	q->tins[1].tin_quantum_prio = quantum >> 4;
 	q->tins[2].tin_quantum_prio = quantum << 2;
 	q->tins[3].tin_quantum_prio = quantum << 4;
 
 	/* bandwidth-sharing weights */
-	q->tins[0].tin_quantum_band = quantum >> 4;
-	q->tins[1].tin_quantum_band = quantum;
+	q->tins[0].tin_quantum_band = quantum;
+	q->tins[1].tin_quantum_band = quantum >> 4;
 	q->tins[2].tin_quantum_band = quantum >> 1;
 	q->tins[3].tin_quantum_band = quantum >> 2;
 
-	/* tin 0 is not 100% rate, but tin 1 is */
-	return 1;
+	return 0;
 }
 
 static int cake_config_diffserv3(struct Qdisc *sch)
@@ -1978,25 +1976,24 @@ static int cake_config_diffserv3(struct Qdisc *sch)
 	q->tin_order = bulk_order;
 
 	/* class characteristics */
-	cake_set_rate(&q->tins[0], rate >> 4, mtu,
+	cake_set_rate(&q->tins[0], rate, mtu,
 		      US2TIME(q->target), US2TIME(q->interval));
-	cake_set_rate(&q->tins[1], rate, mtu,
+	cake_set_rate(&q->tins[1], rate >> 4, mtu,
 		      US2TIME(q->target), US2TIME(q->interval));
 	cake_set_rate(&q->tins[2], rate >> 2, mtu,
 		      US2TIME(q->target), US2TIME(q->target));
 
 	/* priority weights */
-	q->tins[0].tin_quantum_prio = quantum >> 4;
-	q->tins[1].tin_quantum_prio = quantum;
+	q->tins[0].tin_quantum_prio = quantum;
+	q->tins[1].tin_quantum_prio = quantum >> 4;
 	q->tins[2].tin_quantum_prio = quantum << 4;
 
 	/* bandwidth-sharing weights */
-	q->tins[0].tin_quantum_band = quantum >> 4;
-	q->tins[1].tin_quantum_band = quantum;
+	q->tins[0].tin_quantum_band = quantum;
+	q->tins[1].tin_quantum_band = quantum >> 4;
 	q->tins[2].tin_quantum_band = quantum >> 2;
 
-	/* tin 0 is not 100% rate, but tin 1 is */
-	return 1;
+	return 0;
 }
 
 static int cake_config_diffserv_llt(struct Qdisc *sch)
@@ -2399,7 +2396,7 @@ static int cake_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 	st->tin_cnt = q->tin_cnt;
 
 	for (i = 0; i < q->tin_cnt; i++) {
-		struct cake_tin_data *b = &q->tins[i];
+		struct cake_tin_data *b = &q->tins[q->tin_order[i]];
 
 		st->threshold_rate[i] = b->tin_rate_bps;
 		st->target_us[i]      = cobalt_time_to_us(b->cparams.target);
