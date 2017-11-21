@@ -2155,7 +2155,7 @@ static int cake_change(struct Qdisc *sch, struct nlattr *opt)
 			!!nla_get_u32(tb[TCA_CAKE_NAT]);
 	}
 
-	if (tb[TCA_CAKE_OVERHEAD] && tb[TCA_CAKE_ETHERNET]) {
+	if (tb[TCA_CAKE_OVERHEAD]) {
 		if (tb[TCA_CAKE_ETHERNET])
 			q->rate_overhead = -(nla_get_s32(tb[TCA_CAKE_ETHERNET]));
 		else
