@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 #ifndef __LINUX_PKT_SCHED_H
 #define __LINUX_PKT_SCHED_H
 
@@ -63,7 +64,6 @@ struct tc_estimator {
     Macros to manipulate handles:
  */
 
-
 #define TC_H_MAJ_MASK (0xFFFF0000U)
 #define TC_H_MIN_MASK (0x0000FFFFU)
 #define TC_H_MAJ(h) ((h)&TC_H_MAJ_MASK)
@@ -73,12 +73,11 @@ struct tc_estimator {
 #define TC_H_UNSPEC	(0U)
 #define TC_H_ROOT	(0xFFFFFFFFU)
 #define TC_H_INGRESS    (0xFFFFFFF1U)
-#ifndef TC_H_CLSACT
 #define TC_H_CLSACT	TC_H_INGRESS
-#define TC_H_MIN_PRIORITY	0xFFF0U
+
+#define TC_H_MIN_PRIORITY	0xFFE0U
 #define TC_H_MIN_INGRESS	0xFFF2U
 #define TC_H_MIN_EGRESS		0xFFF3U
-#endif
 
 /* Need to corrospond to iproute2 tc/tc_core.h "enum link_layer" */
 enum tc_link_layer {
@@ -182,6 +181,7 @@ enum {
 	TCA_TBF_PRATE64,
 	TCA_TBF_BURST,
 	TCA_TBF_PBURST,
+	TCA_TBF_PAD,
 	__TCA_TBF_MAX,
 };
 
@@ -256,6 +256,7 @@ struct tc_red_qopt {
 #define TC_RED_ECN		1
 #define TC_RED_HARDDROP		2
 #define TC_RED_ADAPTATIVE	4
+#define TC_RED_OFFLOADED	8
 };
 
 struct tc_red_xstats {
@@ -345,8 +346,8 @@ struct tc_choke_xstats {
 #define TC_HTB_PROTOVER		3 /* the same as HTB and TC's major */
 
 struct tc_htb_opt {
-	struct tc_ratespec	rate;
-	struct tc_ratespec	ceil;
+	struct tc_ratespec 	rate;
+	struct tc_ratespec 	ceil;
 	__u32	buffer;
 	__u32	cbuffer;
 	__u32	quantum;
@@ -355,8 +356,8 @@ struct tc_htb_opt {
 };
 struct tc_htb_glob {
 	__u32 version;		/* to match HTB/TC */
-	__u32 rate2quantum;	/* bps->quantum divisor */
-	__u32 defcls;		/* default class number */
+    	__u32 rate2quantum;	/* bps->quantum divisor */
+    	__u32 defcls;		/* default class number */
 	__u32 debug;		/* debug flags */
 
 	/* stats */
@@ -371,6 +372,7 @@ enum {
 	TCA_HTB_DIRECT_QLEN,
 	TCA_HTB_RATE64,
 	TCA_HTB_CEIL64,
+	TCA_HTB_PAD,
 	__TCA_HTB_MAX,
 };
 
@@ -425,8 +427,8 @@ struct tc_cbq_lssopt {
 	unsigned char	flags;
 #define TCF_CBQ_LSS_BOUNDED	1
 #define TCF_CBQ_LSS_ISOLATED	2
-	unsigned char	ewma_log;
-	unsigned char	level;
+	unsigned char  	ewma_log;
+	unsigned char  	level;
 #define TCF_CBQ_LSS_FLAGS	1
 #define TCF_CBQ_LSS_EWMA	2
 #define TCF_CBQ_LSS_MAXIDLE	4
@@ -534,6 +536,10 @@ enum {
 	TCA_NETEM_RATE,
 	TCA_NETEM_ECN,
 	TCA_NETEM_RATE64,
+	TCA_NETEM_PAD,
+	TCA_NETEM_LATENCY64,
+	TCA_NETEM_JITTER64,
+	TCA_NETEM_SLOT,
 	__TCA_NETEM_MAX,
 };
 
@@ -569,6 +575,13 @@ struct tc_netem_rate {
 	__s32	packet_overhead;
 	__u32	cell_size;
 	__s32	cell_overhead;
+};
+
+struct tc_netem_slot {
+	__s64   min_delay; /* nsec */
+	__s64   max_delay;
+	__s32   max_packets;
+	__s32   max_bytes;
 };
 
 enum {
@@ -617,6 +630,30 @@ struct tc_drr_stats {
 #define TC_QOPT_BITMASK 15
 #define TC_QOPT_MAX_QUEUE 16
 
+enum {
+	TC_MQPRIO_HW_OFFLOAD_NONE,	/* no offload requested */
+	TC_MQPRIO_HW_OFFLOAD_TCS,	/* offload TCs, no queue counts */
+	__TC_MQPRIO_HW_OFFLOAD_MAX
+};
+
+#define TC_MQPRIO_HW_OFFLOAD_MAX (__TC_MQPRIO_HW_OFFLOAD_MAX - 1)
+
+enum {
+	TC_MQPRIO_MODE_DCB,
+	TC_MQPRIO_MODE_CHANNEL,
+	__TC_MQPRIO_MODE_MAX
+};
+
+#define __TC_MQPRIO_MODE_MAX (__TC_MQPRIO_MODE_MAX - 1)
+
+enum {
+	TC_MQPRIO_SHAPER_DCB,
+	TC_MQPRIO_SHAPER_BW_RATE,	/* Add new shapers below */
+	__TC_MQPRIO_SHAPER_MAX
+};
+
+#define __TC_MQPRIO_SHAPER_MAX (__TC_MQPRIO_SHAPER_MAX - 1)
+
 struct tc_mqprio_qopt {
 	__u8	num_tc;
 	__u8	prio_tc_map[TC_QOPT_BITMASK + 1];
@@ -624,6 +661,22 @@ struct tc_mqprio_qopt {
 	__u16	count[TC_QOPT_MAX_QUEUE];
 	__u16	offset[TC_QOPT_MAX_QUEUE];
 };
+
+#define TC_MQPRIO_F_MODE		0x1
+#define TC_MQPRIO_F_SHAPER		0x2
+#define TC_MQPRIO_F_MIN_RATE		0x4
+#define TC_MQPRIO_F_MAX_RATE		0x8
+
+enum {
+	TCA_MQPRIO_UNSPEC,
+	TCA_MQPRIO_MODE,
+	TCA_MQPRIO_SHAPER,
+	TCA_MQPRIO_MIN_RATE64,
+	TCA_MQPRIO_MAX_RATE64,
+	__TCA_MQPRIO_MAX,
+};
+
+#define TCA_MQPRIO_MAX (__TCA_MQPRIO_MAX - 1)
 
 /* SFB */
 
@@ -718,6 +771,8 @@ enum {
 	TCA_FQ_CODEL_FLOWS,
 	TCA_FQ_CODEL_QUANTUM,
 	TCA_FQ_CODEL_CE_THRESHOLD,
+	TCA_FQ_CODEL_DROP_BATCH_SIZE,
+	TCA_FQ_CODEL_MEMORY_LIMIT,
 	__TCA_FQ_CODEL_MAX
 };
 
@@ -742,6 +797,8 @@ struct tc_fq_codel_qd_stats {
 	__u32	new_flows_len;	/* count of flows in new list */
 	__u32	old_flows_len;	/* count of flows in old list */
 	__u32	ce_mark;	/* packets above ce_threshold */
+	__u32	memory_usage;	/* in bytes */
+	__u32	drop_overmemory;
 };
 
 struct tc_fq_codel_cl_stats {
@@ -788,6 +845,8 @@ enum {
 
 	TCA_FQ_ORPHAN_MASK,	/* mask applied to orphaned skb hashes */
 
+	TCA_FQ_LOW_RATE_THRESHOLD, /* per packet delay under this rate */
+
 	__TCA_FQ_MAX
 };
 
@@ -805,7 +864,7 @@ struct tc_fq_qd_stats {
 	__u32	flows;
 	__u32	inactive_flows;
 	__u32	throttled_flows;
-	__u32	pad;
+	__u32	unthrottle_latency_ns;
 };
 
 /* Heavy-Hitter Filter */
@@ -857,6 +916,24 @@ struct tc_pie_xstats {
 	__u32 maxq;             /* maximum queue size */
 	__u32 ecn_mark;         /* packets marked with ecn*/
 };
+
+/* CBS */
+struct tc_cbs_qopt {
+	__u8 offload;
+	__u8 _pad[3];
+	__s32 hicredit;
+	__s32 locredit;
+	__s32 idleslope;
+	__s32 sendslope;
+};
+
+enum {
+	TCA_CBS_UNSPEC,
+	TCA_CBS_PARMS,
+	__TCA_CBS_MAX,
+};
+
+#define TCA_CBS_MAX (__TCA_CBS_MAX - 1)
 
 /* CAKE */
 enum {
@@ -915,4 +992,5 @@ struct tc_cake_xstats {
 	__u32 memory_used;	  /* version 3 */
 	struct tc_cake_traffic_stats ack_drops[TC_CAKE_MAX_TINS]; /* v5 */
 };
+
 #endif
