@@ -80,7 +80,6 @@ struct cobalt_skb_cb {
  * struct cobalt_params - contains codel and blue parameters
  * @interval:	codel initial drop rate
  * @target:     maximum persistent sojourn time & blue update rate
- * @threshold:	tolerance for product of sojourn time and time above target
  * @p_inc:      increment of blue drop probability (0.32 fxp)
  * @p_dec:      decrement of blue drop probability (0.32 fxp)
  */
