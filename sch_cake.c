@@ -1039,7 +1039,27 @@ static void cake_heapify_up(struct cake_sched_data *q, u16 i)
 }
 
 static void cake_advance_shaper(struct cake_sched_data *q,
-				struct cake_tin_data *b, u32 len, u64 now, bool drop);
+				struct cake_tin_data *b, u32 len, u64 now, bool drop)
+{
+	/* charge packet bandwidth to this tin
+	 * and to the global shaper.
+	 */
+	if (q->rate_ns) {
+		s64 tdiff1 = b->tin_time_next_packet - now;
+		s64 tdiff2 = (len * (u64)b->tin_rate_ns) >> b->tin_rate_shft;
+		s64 tdiff3 = (len * (u64)q->rate_ns) >> q->rate_shft;
+		s64 tdiff4 = (len * (u64)q->rate_ns) >> (q->rate_shft - 2);
+
+		if (tdiff1 < 0)
+			b->tin_time_next_packet += tdiff2;
+		else if (tdiff1 < tdiff2)
+			b->tin_time_next_packet = now + tdiff2;
+
+		q->time_next_packet += tdiff3;
+		if(!drop)
+			q->failsafe_next_packet += tdiff4;
+	}
+}
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 8, 0)
 static unsigned int cake_drop(struct Qdisc *sch)
@@ -1671,29 +1691,6 @@ retry:
 		q->overflow_timeout--;
 
 	return skb;
-}
-
-static void cake_advance_shaper(struct cake_sched_data *q,
-				struct cake_tin_data *b, u32 len, u64 now, bool drop)
-{
-	/* charge packet bandwidth to this tin
-	 * and to the global shaper.
-	 */
-	if (q->rate_ns) {
-		s64 tdiff1 = b->tin_time_next_packet - now;
-		s64 tdiff2 = (len * (u64)b->tin_rate_ns) >> b->tin_rate_shft;
-		s64 tdiff3 = (len * (u64)q->rate_ns) >> q->rate_shft;
-		s64 tdiff4 = (len * (u64)q->rate_ns) >> (q->rate_shft - 2);
-
-		if (tdiff1 < 0)
-			b->tin_time_next_packet += tdiff2;
-		else if (tdiff1 < tdiff2)
-			b->tin_time_next_packet = now + tdiff2;
-
-		q->time_next_packet += tdiff3;
-		if(!drop)
-			q->failsafe_next_packet += tdiff4;
-	}
 }
 
 static void cake_reset(struct Qdisc *sch)
