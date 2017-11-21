@@ -364,6 +364,7 @@ static u32 cobalt_rec_inv_sqrt_cache[REC_INV_SQRT_CACHE] = {0};
  *
  * Here, invsqrt is a fixed point number (< 1.0), 32bit mantissa, aka Q0.32
  */
+
 static void cobalt_newton_step(struct cobalt_vars *vars)
 {
 	u32 invsqrt = vars->rec_inv_sqrt;
@@ -383,6 +384,16 @@ static void cobalt_invsqrt(struct cobalt_vars *vars)
 	else
 		cobalt_newton_step(vars);
 }
+
+/* There is a big difference in timing between the accurate values placed in
+ * the cache and the approximations given by a single Newton step for small
+ * count values, particularly when stepping from count 1 to 2 or vice versa.
+ * Above 16, a single Newton step gives sufficient accuracy in either
+ * direction, given the precision stored.
+ *
+ * The magnitude of the error when stepping up to count 2 is such as to give
+ * the value that *should* have been produced at count 4.
+ */
 
 static void cobalt_cache_init(void)
 {
@@ -487,6 +498,22 @@ bool cobalt_should_drop(struct cobalt_vars *vars,
 
 	/* Simplified Codel implementation */
 	cobalt_tdiff_t sojourn  = now - cobalt_get_enqueue_time(skb);
+
+/* The 'schedule' variable records, in its sign, whether 'now' is before or
+ * after 'drop_next'.  This allows 'drop_next' to be updated before the next
+ * scheduling decision is actually branched, without destroying that
+ * information.  Similarly, the first 'schedule' value calculated is preserved
+ * in the boolean 'next_due'.
+ *
+ * As for 'drop_next', we take advantage of the fact that 'interval' is both
+ * the delay between first exceeding 'target' and the first signalling event,
+ * *and* the scaling factor for the signalling frequency.  It's therefore very
+ * natural to use a single mechanism for both purposes, and eliminates a
+ * significant amount of reference Codel's spaghetti code.  To help with this,
+ * both the '0' and '1' entries in the invsqrt cache are 0xFFFFFFFF, as close
+ * as possible to 1.0 in fixed-point.
+ */
+
 	cobalt_tdiff_t schedule = now - vars->drop_next;
 	bool over_target = sojourn > p->target;
 	bool next_due    = vars->count && schedule >= 0;
