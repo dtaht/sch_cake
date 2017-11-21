@@ -6,8 +6,8 @@
  *  Copyright (C) 2011-2012 Kathleen Nichols <nichols@pollere.com>
  *  Copyright (C) 2011-2012 Van Jacobson <van@pollere.net>
  *  Copyright (C) 2012 Eric Dumazet <edumazet@google.com>
- *  Copyright (C) 2016 Michael D. Täht <dave.taht@gmail.com>
- *  Copyright (c) 2015-2016 Jonathan Morton <chromatix99@gmail.com>
+ *  Copyright (C) 2016-2017 Michael D. Täht <dave.taht@gmail.com>
+ *  Copyright (c) 2015-2017 Jonathan Morton <chromatix99@gmail.com>
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -61,6 +61,16 @@ typedef s64 cobalt_tdiff_t;
 #include "codel5_compat.h"
 #endif
 
+/* COBALT operates the Codel and BLUE algorithms in parallel, in order to
+ * obtain the best features of each.  Codel is excellent on flows which
+ * respond to congestion signals in a TCP-like way.  BLUE is more effective on
+ * unresponsive flows.
+ */
+
+struct cobalt_skb_cb {
+	cobalt_time_t enqueue_time;
+};
+
 static inline cobalt_time_t cobalt_get_time(void)
 {
 	return ktime_get_ns();
@@ -72,9 +82,22 @@ static inline u32 cobalt_time_to_us(cobalt_time_t val)
 	return (u32)val;
 }
 
-struct cobalt_skb_cb {
-	cobalt_time_t enqueue_time;
-};
+static inline struct cobalt_skb_cb *get_cobalt_cb(const struct sk_buff *skb)
+{
+	qdisc_cb_private_validate(skb, sizeof(struct cobalt_skb_cb));
+	return (struct cobalt_skb_cb *)qdisc_skb_cb(skb)->data;
+}
+
+static inline cobalt_time_t cobalt_get_enqueue_time(const struct sk_buff *skb)
+{
+	return get_cobalt_cb(skb)->enqueue_time;
+}
+
+static inline void cobalt_set_enqueue_time(struct sk_buff *skb,
+					   cobalt_time_t now)
+{
+	get_cobalt_cb(skb)->enqueue_time = now;
+}
 
 /**
  * struct cobalt_params - contains codel and blue parameters
@@ -90,15 +113,14 @@ struct cobalt_params {
 	u32		p_dec;
 };
 
-/**
- * struct cobalt_vars - contains codel and blue variables
- * @count:		  dropping frequency
+/* struct cobalt_vars - contains codel and blue variables
+ * @count:	  codel dropping frequency
  * @rec_inv_sqrt: reciprocal value of sqrt(count) >> 1
  * @drop_next:    time to drop next packet, or when we dropped last
- * @drop_count:	  temp count of dropped packets in dequeue()
- * @ecn_mark:     number of packets we ECN marked instead of dropping
+ * @blue_timer:	  Blue time to next drop
  * @p_drop:       BLUE drop probability (0.32 fxp)
  * @dropping:     set if in dropping state
+ * @ecn_marked:   set if marked
  */
 struct cobalt_vars {
 	u32		count;
