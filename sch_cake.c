@@ -151,7 +151,6 @@ struct cake_host {
 	u32 dsthost_tag;
 	u16 srchost_refcnt;
 	u16 dsthost_refcnt;
-	u32 pad;
 };
 
 struct cake_heap_entry {
