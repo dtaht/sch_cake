@@ -151,9 +151,9 @@ static bool cobalt_queue_empty(struct cobalt_vars *vars,
 /* Call this with a freshly dequeued packet for possible congestion marking.
  * Returns true as an instruction to drop the packet, false for delivery.
  */
-staic bool cobalt_should_drop(struct cobalt_vars *vars,
-			      struct cobalt_params *p,
-			      cobalt_time_t now,
-			      struct sk_buff *skb);
+static bool cobalt_should_drop(struct cobalt_vars *vars,
+			       struct cobalt_params *p,
+			       cobalt_time_t now,
+			       struct sk_buff *skb);
 
 #endif
