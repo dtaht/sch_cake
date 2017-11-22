@@ -748,9 +748,7 @@ cake_hash(struct cake_tin_data *q, const struct sk_buff *skb, int flow_mode)
 			flow_hash ^= dsthost_hash;
 	}
 
-	reduced_hash = flow_hash    % CAKE_QUEUES;
-	srchost_idx  = srchost_hash % CAKE_QUEUES;
-	dsthost_idx  = dsthost_hash % CAKE_QUEUES;
+	reduced_hash = flow_hash % CAKE_QUEUES;
 
 	/* set-associative hashing */
 	/* fast path if no hash collision (direct lookup succeeds) */
@@ -811,6 +809,7 @@ found:
 		q->tags[reduced_hash] = flow_hash;
 
 		if (need_allocate_src) {
+			srchost_idx = srchost_hash % CAKE_QUEUES;
 			inner_hash = srchost_idx % CAKE_SET_WAYS;
 			outer_hash = srchost_idx - inner_hash;
 			for (i = 0, k = inner_hash; i < CAKE_SET_WAYS;
@@ -832,6 +831,7 @@ found_src:
 		}
 
 		if (need_allocate_dst) {
+			dsthost_idx = dsthost_hash % CAKE_QUEUES;
 			inner_hash = dsthost_idx % CAKE_SET_WAYS;
 			outer_hash = dsthost_idx - inner_hash;
 			for (i = 0, k = inner_hash; i < CAKE_SET_WAYS;
