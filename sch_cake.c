@@ -405,7 +405,7 @@ static void cobalt_cache_init(void)
 	}
 }
 
-void cobalt_vars_init(struct cobalt_vars *vars)
+static void cobalt_vars_init(struct cobalt_vars *vars)
 {
 	memset(vars, 0, sizeof(*vars));
 
@@ -429,8 +429,9 @@ static cobalt_time_t cobalt_control_law(cobalt_time_t t,
 /* Call this when a packet had to be dropped due to queue overflow.  Returns
  * true if the BLUE state was quiescent before but active after this call.
  */
-bool cobalt_queue_full(struct cobalt_vars *vars, struct cobalt_params *p,
-		       cobalt_time_t now)
+static bool cobalt_queue_full(struct cobalt_vars *vars,
+			      struct cobalt_params *p,
+			      cobalt_time_t now)
 {
 	bool up = false;
 
@@ -452,8 +453,9 @@ bool cobalt_queue_full(struct cobalt_vars *vars, struct cobalt_params *p,
 /* Call this when the queue was serviced but turned out to be empty.  Returns
  * true if the BLUE state was active before but quiescent after this call.
  */
-bool cobalt_queue_empty(struct cobalt_vars *vars, struct cobalt_params *p,
-			cobalt_time_t now)
+static bool cobalt_queue_empty(struct cobalt_vars *vars,
+			       struct cobalt_params *p,
+			       cobalt_time_t now)
 {
 	bool down = false;
 
@@ -481,9 +483,9 @@ bool cobalt_queue_empty(struct cobalt_vars *vars, struct cobalt_params *p,
 /* Call this with a freshly dequeued packet for possible congestion marking.
  * Returns true as an instruction to drop the packet, false for delivery.
  */
-bool cobalt_should_drop(struct cobalt_vars *vars,
-			struct cobalt_params *p,
-			cobalt_time_t now,
+static bool cobalt_should_drop(struct cobalt_vars *vars,
+			       struct cobalt_params *p,
+			       cobalt_time_t now,
 			struct sk_buff *skb)
 {
 	bool drop = false;
