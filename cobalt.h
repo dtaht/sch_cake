@@ -133,27 +133,27 @@ struct cobalt_vars {
 };
 
 /* Initialise visible and internal data. */
-void cobalt_vars_init(struct cobalt_vars *vars);
+static void cobalt_vars_init(struct cobalt_vars *vars);
 
-struct cobalt_skb_cb *get_cobalt_cb(const struct sk_buff *skb);
-cobalt_time_t cobalt_get_enqueue_time(const struct sk_buff *skb);
+static struct cobalt_skb_cb *get_cobalt_cb(const struct sk_buff *skb);
+static cobalt_time_t cobalt_get_enqueue_time(const struct sk_buff *skb);
 
 /* Call this when a packet had to be dropped due to queue overflow. */
-bool cobalt_queue_full(struct cobalt_vars *vars,
-		       struct cobalt_params *p,
-		       cobalt_time_t now);
+static bool cobalt_queue_full(struct cobalt_vars *vars,
+			      struct cobalt_params *p,
+			      cobalt_time_t now);
 
 /* Call this when the queue was serviced but turned out to be empty. */
-bool cobalt_queue_empty(struct cobalt_vars *vars,
-			struct cobalt_params *p,
-			cobalt_time_t now);
+static bool cobalt_queue_empty(struct cobalt_vars *vars,
+			       struct cobalt_params *p,
+			       cobalt_time_t now);
 
 /* Call this with a freshly dequeued packet for possible congestion marking.
  * Returns true as an instruction to drop the packet, false for delivery.
  */
-bool cobalt_should_drop(struct cobalt_vars *vars,
-	struct cobalt_params *p,
-	cobalt_time_t now,
-	struct sk_buff *skb);
+staic bool cobalt_should_drop(struct cobalt_vars *vars,
+			      struct cobalt_params *p,
+			      cobalt_time_t now,
+			      struct sk_buff *skb);
 
 #endif
