@@ -887,18 +887,19 @@ flow_queue_add(struct cake_flow *flow, struct sk_buff *skb)
 	skb->next = NULL;
 }
 
-static struct sk_buff *ack_filter(struct cake_flow *flow, bool aggressive)
+static struct sk_buff *ack_filter(struct cake_sched_data *q,
+				  struct cake_flow *flow)
 {
 	int seglen;
 	struct sk_buff *skb = flow->tail, *skb_check, *skb_check_prev;
 	struct iphdr *iph, *iph_check;
 	struct ipv6hdr *ipv6h, *ipv6h_check;
 	struct tcphdr *tcph, *tcph_check;
-
 	bool otherconn_ack_seen = false;
 	struct sk_buff *otherconn_checked_to = NULL;
 	bool thisconn_redundant_seen = false, thisconn_seen_last = false;
 	struct sk_buff *thisconn_checked_to = NULL, *thisconn_ack = NULL;
+	bool aggressive = q->rate_flags & CAKE_FLAG_ACK_AGGRESSIVE;
 
 	/* no other possible ACKs to filter */
 	if (flow->head == skb)
@@ -1252,17 +1253,20 @@ static void cake_heapify_up(struct cake_sched_data *q, u16 i)
 	}
 }
 
-static void cake_advance_shaper(struct cake_sched_data *q,
-				struct cake_tin_data *b, u32 len, u64 now, bool drop)
+static int cake_advance_shaper(struct cake_sched_data *q,
+			       struct cake_tin_data *b,
+			       u32 len, u64 now, bool drop)
 {
+	s64 tdiff1, tdiff2, tdiff3, tdiff4;
 	/* charge packet bandwidth to this tin
 	 * and to the global shaper.
 	 */
 	if (q->rate_ns) {
-		s64 tdiff1 = b->tin_time_next_packet - now;
-		s64 tdiff2 = (len * (u64)b->tin_rate_ns) >> b->tin_rate_shft;
-		s64 tdiff3 = (len * (u64)q->rate_ns) >> q->rate_shft;
-		s64 tdiff4 = (len * (u64)q->rate_ns) >> (q->rate_shft - 2);
+		len = cake_overhead(q, len);
+		tdiff1 = b->tin_time_next_packet - now;
+		tdiff2 = (len * (u64)b->tin_rate_ns) >> b->tin_rate_shft;
+		tdiff3 = (len * (u64)q->rate_ns) >> q->rate_shft;
+		tdiff4 = (len * (u64)q->rate_ns) >> (q->rate_shft - 2);
 
 		if (tdiff1 < 0)
 			b->tin_time_next_packet += tdiff2;
@@ -1273,6 +1277,7 @@ static void cake_advance_shaper(struct cake_sched_data *q,
 		if (!drop)
 			q->failsafe_next_packet += tdiff4;
 	}
+	return len;
 }
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 8, 0)
@@ -1325,7 +1330,7 @@ static unsigned int cake_drop(struct Qdisc *sch, struct sk_buff **to_free)
 	sch->qstats.drops++;
 
 	if (q->rate_flags & CAKE_FLAG_INGRESS)
-		cake_advance_shaper(q, b, cake_overhead(q, len), now, true);
+		cake_advance_shaper(q, b, len, now, true);
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 8, 0)
 	kfree_skb(skb);
@@ -1395,7 +1400,7 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 	/* signed len to handle corner case filtered ACK larger than trigger */
 	int len = qdisc_pkt_len(skb);
 	u64 now = cobalt_get_time();
-	struct sk_buff *skb_filtered_ack = NULL;
+	struct sk_buff *ack = NULL;
 
 	/* extract the Diffserv Precedence field, if it exists */
 	/* and clear DSCP bits if washing */
@@ -1469,20 +1474,22 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 			flow_queue_add(flow, segs);
 
 			if (q->rate_flags & CAKE_FLAG_ACK_FILTER)
-				skb_filtered_ack = ack_filter(flow, q->rate_flags & CAKE_FLAG_ACK_AGGRESSIVE);
+				ack = ack_filter(q, flow);
 
-			if (skb_filtered_ack) {
+			if (ack) {
 				b->ack_drops++;
-				b->bytes += skb_filtered_ack->len;
-				slen += segs->len - skb_filtered_ack->len;
+				b->bytes += ack->len;
+				slen += segs->len - ack->len;
 				q->buffer_used += segs->truesize -
-						skb_filtered_ack->truesize;
+					ack->truesize;
 				if (q->rate_flags & CAKE_FLAG_INGRESS)
-					cake_advance_shaper(q, b, cake_overhead(q, skb_filtered_ack->len), now, true);
+					cake_advance_shaper(q, b,
+							    qdisc_pkt_len(ack),
+							    now, true);
 
 				qdisc_tree_reduce_backlog(sch, 1,
-							  qdisc_pkt_len(skb_filtered_ack));
-				consume_skb(skb_filtered_ack);
+							  qdisc_pkt_len(ack));
+				consume_skb(ack);
 			} else {
 				sch->q.qlen++;
 				slen += segs->len;
@@ -1506,20 +1513,18 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 		flow_queue_add(flow, skb);
 
 		if (q->rate_flags & CAKE_FLAG_ACK_FILTER)
-			skb_filtered_ack = ack_filter(flow, (q->rate_flags & CAKE_FLAG_ACK_AGGRESSIVE));
+			ack = ack_filter(q, flow);
 
-		if (skb_filtered_ack) {
+		if (ack) {
 			b->ack_drops++;
-			b->bytes += qdisc_pkt_len(skb_filtered_ack);
-			len -= qdisc_pkt_len(skb_filtered_ack);
-			q->buffer_used += skb->truesize -
-				skb_filtered_ack->truesize;
+			b->bytes += qdisc_pkt_len(ack);
+			len -= qdisc_pkt_len(ack);
+			q->buffer_used += skb->truesize - ack->truesize;
 			if (q->rate_flags & CAKE_FLAG_INGRESS)
-				cake_advance_shaper(q, b, cake_overhead(q, skb_filtered_ack->len), now, true);
+				cake_advance_shaper(q, b, ack->len, now, true);
 
-			qdisc_tree_reduce_backlog(sch, 1,
-						  qdisc_pkt_len(skb_filtered_ack));
-			consume_skb(skb_filtered_ack);
+			qdisc_tree_reduce_backlog(sch, 1, qdisc_pkt_len(ack));
+			consume_skb(ack);
 		} else {
 			sch->q.qlen++;
 			q->buffer_used      += skb->truesize;
@@ -1838,8 +1843,9 @@ retry:
 
 		/* drop this packet, get another one */
 		if (q->rate_flags & CAKE_FLAG_INGRESS) {
-			len = cake_overhead(q, qdisc_pkt_len(skb));
-			cake_advance_shaper(q, b, len, now, true);
+			len = cake_advance_shaper(q, b,
+						  qdisc_pkt_len(skb),
+						  now, true);
 			flow->deficit -= len;
 			b->tin_deficit -= len;
 		}
