@@ -163,7 +163,7 @@ struct cake_tin_data {
 	u32	tags[CAKE_QUEUES]; /* for set association */
 	u16	overflow_idx[CAKE_QUEUES];
 	struct cake_host hosts[CAKE_QUEUES]; /* for triple isolation */
-	u32	perturbation;
+	u32	perturb;
 	u16	flow_quantum;
 
 	struct cobalt_params cparams;
@@ -675,11 +675,11 @@ cake_hash(struct cake_tin_data *q, const struct sk_buff *skb, int flow_mode)
 	if (flow_mode & CAKE_FLOW_NAT_FLAG)
 		cake_update_flowkeys(&keys, skb);
 
-	srchost_hash = jhash_1word((__force u32)keys.src, q->perturbation);
-	dsthost_hash = jhash_1word((__force u32)keys.dst, q->perturbation);
+	srchost_hash = jhash_1word((__force u32)keys.src, q->perturb);
+	dsthost_hash = jhash_1word((__force u32)keys.dst, q->perturb);
 
 	if (flow_mode & CAKE_FLOW_FLOWS)
-		flow_hash = jhash_3words((__force u32)keys.dst, (__force u32)keys.src ^ keys.ip_proto, (__force u32)keys.ports, q->perturbation);
+		flow_hash = jhash_3words((__force u32)keys.dst, (__force u32)keys.src ^ keys.ip_proto, (__force u32)keys.ports, q->perturb);
 
 #else
 
@@ -759,8 +759,8 @@ cake_hash(struct cake_tin_data *q, const struct sk_buff *skb, int flow_mode)
 		u32 inner_hash = reduced_hash % CAKE_SET_WAYS;
 		u32 outer_hash = reduced_hash - inner_hash;
 		u32 i, k;
-		bool need_allocate_src = false;
-		bool need_allocate_dst = false;
+		bool allocate_src = false;
+		bool allocate_dst = false;
 
 		/* check if any active queue in the set is reserved for
 		 * this flow.
@@ -773,8 +773,8 @@ cake_hash(struct cake_tin_data *q, const struct sk_buff *skb, int flow_mode)
 
 				if (!q->flows[outer_hash + k].set) {
 					/* need to increment host refcnts */
-					need_allocate_src = true;
-					need_allocate_dst = true;
+					allocate_src = true;
+					allocate_dst = true;
 				}
 
 				goto found;
@@ -788,8 +788,8 @@ cake_hash(struct cake_tin_data *q, const struct sk_buff *skb, int flow_mode)
 			 i++, k = (k + 1) % CAKE_SET_WAYS) {
 			if (!q->flows[outer_hash + k].set) {
 				q->way_misses++;
-				need_allocate_src = true;
-				need_allocate_dst = true;
+				allocate_src = true;
+				allocate_dst = true;
 				goto found;
 			}
 		}
@@ -800,15 +800,15 @@ cake_hash(struct cake_tin_data *q, const struct sk_buff *skb, int flow_mode)
 		q->way_collisions++;
 		q->hosts[q->flows[reduced_hash].srchost].srchost_refcnt--;
 		q->hosts[q->flows[reduced_hash].dsthost].dsthost_refcnt--;
-		need_allocate_src = true;
-		need_allocate_dst = true;
+		allocate_src = true;
+		allocate_dst = true;
 
 found:
 		/* reserve queue for future packets in same flow */
 		reduced_hash = outer_hash + k;
 		q->tags[reduced_hash] = flow_hash;
 
-		if (need_allocate_src) {
+		if (allocate_src) {
 			srchost_idx = srchost_hash % CAKE_QUEUES;
 			inner_hash = srchost_idx % CAKE_SET_WAYS;
 			outer_hash = srchost_idx - inner_hash;
@@ -830,7 +830,7 @@ found_src:
 			q->flows[reduced_hash].srchost = srchost_idx;
 		}
 
-		if (need_allocate_dst) {
+		if (allocate_dst) {
 			dsthost_idx = dsthost_hash % CAKE_QUEUES;
 			inner_hash = dsthost_idx % CAKE_SET_WAYS;
 			outer_hash = dsthost_idx - inner_hash;
@@ -2490,7 +2490,7 @@ static int cake_init(struct Qdisc *sch, struct nlattr *opt)
 	for (i = 0; i < CAKE_MAX_TINS; i++) {
 		struct cake_tin_data *b = q->tins + i;
 
-		b->perturbation = prandom_u32();
+		b->perturb = prandom_u32();
 		INIT_LIST_HEAD(&b->new_flows);
 		INIT_LIST_HEAD(&b->old_flows);
 		INIT_LIST_HEAD(&b->decaying_flows);
