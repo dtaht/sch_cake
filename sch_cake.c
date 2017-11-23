@@ -173,7 +173,7 @@ struct cake_tin_data {
 	u16	decaying_flow_count;
 	u16	unresponsive_flow_count;
 
-	u16	max_skblen;
+	u32	max_skblen;
 
 	struct list_head new_flows;
 	struct list_head old_flows;
