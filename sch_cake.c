@@ -2198,7 +2198,7 @@ static int cake_config_diffserv3(struct Qdisc *sch)
 	cake_set_rate(&q->tins[1], rate >> 4, mtu,
 		      US2TIME(q->target), US2TIME(q->interval));
 	cake_set_rate(&q->tins[2], rate >> 2, mtu,
-		      US2TIME(q->target), US2TIME(q->target));
+		      US2TIME(q->target), US2TIME(q->interval));
 
 	/* priority weights */
 	q->tins[0].tin_quantum_prio = quantum;
@@ -2241,7 +2241,7 @@ static int cake_config_diffserv_llt(struct Qdisc *sch)
 	cake_set_rate(&q->tins[1], rate / 3, mtu,
 		      US2TIME(q->target), US2TIME(q->interval));
 	cake_set_rate(&q->tins[2], rate / 3, mtu,
-		      US2TIME(q->target), US2TIME(q->target));
+		      US2TIME(q->target), US2TIME(q->interval));
 	cake_set_rate(&q->tins[3], rate >> 4, mtu,
 		      US2TIME(q->target), US2TIME(q->interval));
 	cake_set_rate(&q->tins[4], rate >> 4, mtu,
