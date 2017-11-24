@@ -887,8 +887,8 @@ flow_queue_add(struct cake_flow *flow, struct sk_buff *skb)
 	skb->next = NULL;
 }
 
-static struct sk_buff *ack_filter(struct cake_sched_data *q,
-				  struct cake_flow *flow)
+static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
+				       struct cake_flow *flow)
 {
 	int seglen;
 	struct sk_buff *skb = flow->tail, *skb_check, *skb_check_prev;
@@ -1474,7 +1474,7 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 			flow_queue_add(flow, segs);
 
 			if (q->rate_flags & CAKE_FLAG_ACK_FILTER)
-				ack = ack_filter(q, flow);
+				ack = cake_ack_filter(q, flow);
 
 			if (ack) {
 				b->ack_drops++;
@@ -1513,7 +1513,7 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 		flow_queue_add(flow, skb);
 
 		if (q->rate_flags & CAKE_FLAG_ACK_FILTER)
-			ack = ack_filter(q, flow);
+			ack = cake_ack_filter(q, flow);
 
 		if (ack) {
 			b->ack_drops++;
