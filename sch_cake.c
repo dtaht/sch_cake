@@ -2313,10 +2313,7 @@ static void cake_reconfigure(struct Qdisc *sch)
 		q->buffer_limit = ~0;
 	}
 
-	if (1 || q->rate_bps)
-		sch->flags &= ~TCQ_F_CAN_BYPASS;
-	else
-		sch->flags |= TCQ_F_CAN_BYPASS;
+	sch->flags &= ~TCQ_F_CAN_BYPASS;
 
 	q->buffer_limit = min(q->buffer_limit, max(sch->limit * psched_mtu(qdisc_dev(sch)), q->buffer_config_limit));
 }
