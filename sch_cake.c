@@ -743,7 +743,7 @@ found:
 		reduced_hash = outer_hash + k;
 		q->tags[reduced_hash] = flow_hash;
 
-		if (allocate_host) {
+		if (allocate_src) {
 			srchost_idx = srchost_hash % CAKE_QUEUES;
 			inner_hash = srchost_idx % CAKE_SET_WAYS;
 			outer_hash = srchost_idx - inner_hash;
@@ -764,6 +764,9 @@ found_src:
 			q->hosts[srchost_idx].srchost_refcnt++;
 			q->flows[reduced_hash].srchost = srchost_idx;
 
+		}
+
+		if (allocate_dst) {
 			dsthost_idx = dsthost_hash % CAKE_QUEUES;
 			inner_hash = dsthost_idx % CAKE_SET_WAYS;
 			outer_hash = dsthost_idx - inner_hash;
