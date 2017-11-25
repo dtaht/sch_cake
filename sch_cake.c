@@ -758,8 +758,7 @@ cake_hash(struct cake_tin_data *q, const struct sk_buff *skb, int flow_mode)
 		u32 inner_hash = reduced_hash % CAKE_SET_WAYS;
 		u32 outer_hash = reduced_hash - inner_hash;
 		u32 i, k;
-		bool allocate_src = false;
-		bool allocate_dst = false;
+		bool allocate_host = false;
 
 		/* check if any active queue in the set is reserved for
 		 * this flow.
@@ -772,8 +771,7 @@ cake_hash(struct cake_tin_data *q, const struct sk_buff *skb, int flow_mode)
 
 				if (!q->flows[outer_hash + k].set) {
 					/* need to increment host refcnts */
-					allocate_src = true;
-					allocate_dst = true;
+					allocate_host = true;
 				}
 
 				goto found;
@@ -787,8 +785,7 @@ cake_hash(struct cake_tin_data *q, const struct sk_buff *skb, int flow_mode)
 			 i++, k = (k + 1) % CAKE_SET_WAYS) {
 			if (!q->flows[outer_hash + k].set) {
 				q->way_misses++;
-				allocate_src = true;
-				allocate_dst = true;
+				allocate_host = true;
 				goto found;
 			}
 		}
@@ -799,15 +796,14 @@ cake_hash(struct cake_tin_data *q, const struct sk_buff *skb, int flow_mode)
 		q->way_collisions++;
 		q->hosts[q->flows[reduced_hash].srchost].srchost_refcnt--;
 		q->hosts[q->flows[reduced_hash].dsthost].dsthost_refcnt--;
-		allocate_src = true;
-		allocate_dst = true;
+		allocate_host = true;
 
 found:
 		/* reserve queue for future packets in same flow */
 		reduced_hash = outer_hash + k;
 		q->tags[reduced_hash] = flow_hash;
 
-		if (allocate_src) {
+		if (allocate_host) {
 			srchost_idx = srchost_hash % CAKE_QUEUES;
 			inner_hash = srchost_idx % CAKE_SET_WAYS;
 			outer_hash = srchost_idx - inner_hash;
@@ -827,9 +823,7 @@ found_src:
 			srchost_idx = outer_hash + k;
 			q->hosts[srchost_idx].srchost_refcnt++;
 			q->flows[reduced_hash].srchost = srchost_idx;
-		}
 
-		if (allocate_dst) {
 			dsthost_idx = dsthost_hash % CAKE_QUEUES;
 			inner_hash = dsthost_idx % CAKE_SET_WAYS;
 			outer_hash = dsthost_idx - inner_hash;
