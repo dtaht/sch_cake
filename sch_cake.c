@@ -2423,6 +2423,15 @@ static int cake_change(struct Qdisc *sch, struct nlattr *opt)
 	return 0;
 }
 
+static void *cake_zalloc(size_t sz)
+{
+	void *ptr = kzalloc(sz, GFP_KERNEL | __GFP_NOWARN);
+
+	if (!ptr)
+		ptr = vzalloc(sz);
+	return ptr;
+}
+
 static void cake_free(void *addr)
 {
 	if (addr)
@@ -2471,8 +2480,7 @@ static int cake_init(struct Qdisc *sch, struct nlattr *opt)
 	for (i = 1; i <= CAKE_QUEUES; i++)
 		quantum_div[i] = 65535 / i;
 
-	q->tins = kvzalloc(CAKE_MAX_TINS * sizeof(struct cake_tin_data),
-			   GFP_KERNEL);
+	q->tins = cake_zalloc(CAKE_MAX_TINS * sizeof(struct cake_tin_data));
 	if (!q->tins)
 		goto nomem;
 
@@ -2578,11 +2586,11 @@ static int cake_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 {
 	/* reuse fq_codel stats format */
 	struct cake_sched_data *q = qdisc_priv(sch);
-	struct tc_cake_xstats *st = kvzalloc(sizeof(*st), GFP_KERNEL);
+	struct tc_cake_xstats *st = cake_zalloc(sizeof(*st));
 	int i;
 
 	if (!st)
-		return -ENOMEM;
+		return -1;
 
 	st->version = 5;
 	st->max_tins = TC_CAKE_MAX_TINS;
