@@ -95,10 +95,11 @@
  *   the delay to another.  Flows are distributed to queues using a
  *   set-associative hash function.
  *
- * - Each queue is actively managed by Codel.  This serves flows fairly, and
- *   signals congestion early via ECN (if available) and/or packet drops, to
- *   keep latency low.  The codel parameters are auto-tuned based on the
- *   bandwidth setting, as is necessary at low bandwidths.
+ * - Each queue is actively managed by Cobalt, which is a combination of the
+ *   Codel and Blue AQM algorithms.  This serves flows fairly, and signals
+ *   congestion early via ECN (if available) and/or packet drops, to keep
+ *   latency low.  The codel parameters are auto-tuned based on the bandwidth
+ *   setting, as is necessary at low bandwidths.
  *
  * The configuration parameters are kept deliberately simple for ease of use.
  * Everything has sane defaults.  Complete generality of configuration is *not*
@@ -110,9 +111,8 @@
  * priority-based weight (high) or a bandwidth-based weight (low) is used for
  * that tin in the current pass.
  *
- * This qdisc incorporates much of Eric Dumazet's fq_codel code, which he kindly
- * granted us permission to use, which we customised for use as an integrated
- * subordinate.  See sch_fq_codel.c for details of operation.
+ * This qdisc was inspired by Eric Dumazet's fq_codel code, which he kindly
+ * granted us permission to leverage.
  */
 
 #define CAKE_SET_WAYS (8)
