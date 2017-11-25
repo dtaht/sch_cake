@@ -1430,8 +1430,8 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 				q->failsafe_next_packet = now;
 				q->time_next_packet = now;
 			} else if (q->time_next_packet > now && q->failsafe_next_packet > now) {
-				u64 next_time = (q->time_next_packet < q->failsafe_next_packet)
-					? q->time_next_packet : q->failsafe_next_packet;
+				u64 next_time = min(q->time_next_packet,
+						    q->failsafe_next_packet);
 				sch->qstats.overlimits++;
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 8, 0)
 				codel_watchdog_schedule_ns(&q->watchdog, next_time, true);
