@@ -64,7 +64,7 @@
 #endif
 #include "cobalt.h"
 
-#if defined(CONFIG_NF_CONNTRACK) || defined(CONFIG_NF_CONNTRACK_MODULE)
+#if IS_ENABLED(CONFIG_NF_CONNTRACK)
 #include <net/netfilter/nf_conntrack_core.h>
 #include <net/netfilter/nf_conntrack_zones.h>
 #include <net/netfilter/nf_conntrack.h>
@@ -572,8 +572,7 @@ static bool cobalt_should_drop(struct cobalt_vars *vars,
 	return drop;
 }
 
-#if defined(CONFIG_NF_CONNTRACK) || defined(CONFIG_NF_CONNTRACK_MODULE)
-
+#if IS_ENABLED(CONFIG_NF_CONNTRACK)
 #if KERNEL_VERSION(4, 0, 0) > LINUX_VERSION_CODE
 #define tc_skb_protocol(_skb) \
 (vlan_tx_tag_present(_skb) ? _skb->vlan_proto : _skb->protocol)
