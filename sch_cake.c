@@ -1477,6 +1477,7 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 
 			if (ack) {
 				b->ack_drops++;
+				sch->qstats.drops++;
 				b->bytes += ack->len;
 				slen += segs->len - ack->len;
 				q->buffer_used += segs->truesize -
@@ -1516,6 +1517,7 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 
 		if (ack) {
 			b->ack_drops++;
+			sch->qstats.drops++;
 			b->bytes += qdisc_pkt_len(ack);
 			len -= qdisc_pkt_len(ack);
 			q->buffer_used += skb->truesize - ack->truesize;
