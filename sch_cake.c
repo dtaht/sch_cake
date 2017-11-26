@@ -151,7 +151,6 @@ struct cake_host {
 	u32 dsthost_tag;
 	u16 srchost_refcnt;
 	u16 dsthost_refcnt;
-	u32 pad;
 };
 
 struct cake_heap_entry {
@@ -1040,7 +1039,27 @@ static void cake_heapify_up(struct cake_sched_data *q, u16 i)
 }
 
 static void cake_advance_shaper(struct cake_sched_data *q,
-				struct cake_tin_data *b, u32 len, u64 now, bool drop);
+				struct cake_tin_data *b, u32 len, u64 now, bool drop)
+{
+	/* charge packet bandwidth to this tin
+	 * and to the global shaper.
+	 */
+	if (q->rate_ns) {
+		s64 tdiff1 = b->tin_time_next_packet - now;
+		s64 tdiff2 = (len * (u64)b->tin_rate_ns) >> b->tin_rate_shft;
+		s64 tdiff3 = (len * (u64)q->rate_ns) >> q->rate_shft;
+		s64 tdiff4 = (len * (u64)q->rate_ns) >> (q->rate_shft - 2);
+
+		if (tdiff1 < 0)
+			b->tin_time_next_packet += tdiff2;
+		else if (tdiff1 < tdiff2)
+			b->tin_time_next_packet = now + tdiff2;
+
+		q->time_next_packet += tdiff3;
+		if(!drop)
+			q->failsafe_next_packet += tdiff4;
+	}
+}
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 8, 0)
 static unsigned int cake_drop(struct Qdisc *sch)
@@ -1674,29 +1693,6 @@ retry:
 	return skb;
 }
 
-static void cake_advance_shaper(struct cake_sched_data *q,
-				struct cake_tin_data *b, u32 len, u64 now, bool drop)
-{
-	/* charge packet bandwidth to this tin
-	 * and to the global shaper.
-	 */
-	if (q->rate_ns) {
-		s64 tdiff1 = b->tin_time_next_packet - now;
-		s64 tdiff2 = (len * (u64)b->tin_rate_ns) >> b->tin_rate_shft;
-		s64 tdiff3 = (len * (u64)q->rate_ns) >> q->rate_shft;
-		s64 tdiff4 = tdiff3 + (tdiff3 >> 1);
-
-		if (tdiff1 < 0)
-			b->tin_time_next_packet += tdiff2;
-		else if (tdiff1 < tdiff2)
-			b->tin_time_next_packet = now + tdiff2;
-
-		q->time_next_packet += tdiff3;
-		if(!drop)
-			q->failsafe_next_packet += tdiff4;
-	}
-}
-
 static void cake_reset(struct Qdisc *sch)
 {
 	u32 c;
@@ -2159,7 +2155,7 @@ static int cake_change(struct Qdisc *sch, struct nlattr *opt)
 			!!nla_get_u32(tb[TCA_CAKE_NAT]);
 	}
 
-	if (tb[TCA_CAKE_OVERHEAD] && tb[TCA_CAKE_ETHERNET]) {
+	if (tb[TCA_CAKE_OVERHEAD]) {
 		if (tb[TCA_CAKE_ETHERNET])
 			q->rate_overhead = -(nla_get_s32(tb[TCA_CAKE_ETHERNET]));
 		else
