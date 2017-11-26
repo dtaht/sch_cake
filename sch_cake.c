@@ -619,6 +619,20 @@ static inline void cake_update_flowkeys(struct flow_keys *keys,
 }
 #endif
 
+/* Cake has several subtle multiple bit settings. In these cases you
+ *  would be matching triple isolate mode as well.
+ */
+
+static inline bool cake_dsrc(int flow_mode)
+{
+	return (flow_mode & CAKE_FLOW_DUAL_SRC) == CAKE_FLOW_DUAL_SRC;
+}
+
+static inline bool cake_ddst(int flow_mode)
+{
+	return (flow_mode & CAKE_FLOW_DUAL_DST) == CAKE_FLOW_DUAL_DST;
+}
+
 static inline u32
 cake_hash(struct cake_tin_data *q, const struct sk_buff *skb, int flow_mode)
 {
@@ -708,8 +722,8 @@ cake_hash(struct cake_tin_data *q, const struct sk_buff *skb, int flow_mode)
 
 				if (!q->flows[outer_hash + k].set) {
 					/* need to increment host refcnts */
-					allocate_src = ((flow_mode & CAKE_FLOW_DUAL_SRC) == CAKE_FLOW_DUAL_SRC);
-					allocate_dst = ((flow_mode & CAKE_FLOW_DUAL_DST) == CAKE_FLOW_DUAL_DST);
+					allocate_src = cake_dsrc(flow_mode);
+					allocate_dst = cake_ddst(flow_mode);
 				}
 
 				goto found;
@@ -723,8 +737,8 @@ cake_hash(struct cake_tin_data *q, const struct sk_buff *skb, int flow_mode)
 			 i++, k = (k + 1) % CAKE_SET_WAYS) {
 			if (!q->flows[outer_hash + k].set) {
 				q->way_misses++;
-				allocate_src = ((flow_mode & CAKE_FLOW_DUAL_SRC) == CAKE_FLOW_DUAL_SRC);
-				allocate_dst = ((flow_mode & CAKE_FLOW_DUAL_DST) == CAKE_FLOW_DUAL_DST);
+				allocate_src = cake_dsrc(flow_mode);
+				allocate_dst = cake_ddst(flow_mode);
 				goto found;
 			}
 		}
@@ -735,9 +749,8 @@ cake_hash(struct cake_tin_data *q, const struct sk_buff *skb, int flow_mode)
 		q->way_collisions++;
 		q->hosts[q->flows[reduced_hash].srchost].srchost_refcnt--;
 		q->hosts[q->flows[reduced_hash].dsthost].dsthost_refcnt--;
-		allocate_src = ((flow_mode & CAKE_FLOW_DUAL_SRC) == CAKE_FLOW_DUAL_SRC);
-		allocate_dst = ((flow_mode & CAKE_FLOW_DUAL_DST) == CAKE_FLOW_DUAL_DST);
-
+		allocate_src = cake_dsrc(flow_mode);
+		allocate_dst = cake_ddst(flow_mode);
 found:
 		/* reserve queue for future packets in same flow */
 		reduced_hash = outer_hash + k;
@@ -1510,10 +1523,10 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 		flow->set = CAKE_SET_SPARSE;
 		b->sparse_flow_count++;
 
-		if ((q->flow_mode & CAKE_FLOW_DUAL_SRC) == CAKE_FLOW_DUAL_SRC)
+		if (cake_dsrc(q->flow_mode))
 			host_load = max(host_load, srchost->srchost_refcnt);
 
-		if ((q->flow_mode & CAKE_FLOW_DUAL_DST) == CAKE_FLOW_DUAL_DST)
+		if (cake_ddst(q->flow_mode))
 			host_load = max(host_load, dsthost->dsthost_refcnt);
 
 		flow->deficit = (b->flow_quantum * quantum_div[host_load]) >> 16;
@@ -1669,10 +1682,10 @@ retry:
 	dsthost = &b->hosts[flow->dsthost];
 	host_load = 1;
 
-	if ((q->flow_mode & CAKE_FLOW_DUAL_SRC) == CAKE_FLOW_DUAL_SRC)
+	if (cake_dsrc(q->flow_mode))
 		host_load = max(host_load, srchost->srchost_refcnt);
 
-	if ((q->flow_mode & CAKE_FLOW_DUAL_DST) == CAKE_FLOW_DUAL_DST)
+	if (cake_ddst(q->flow_mode))
 		host_load = max(host_load, dsthost->dsthost_refcnt);
 
 	WARN_ON(host_load > CAKE_QUEUES);
