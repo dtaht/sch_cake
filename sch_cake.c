@@ -840,7 +840,6 @@ found_src:
 			srchost_idx = outer_hash + k;
 			q->hosts[srchost_idx].srchost_refcnt++;
 			q->flows[reduced_hash].srchost = srchost_idx;
-
 		}
 
 		if (allocate_dst) {
