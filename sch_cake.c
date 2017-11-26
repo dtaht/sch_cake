@@ -776,7 +776,6 @@ found_src:
 			srchost_idx = outer_hash + k;
 			q->hosts[srchost_idx].srchost_refcnt++;
 			q->flows[reduced_hash].srchost = srchost_idx;
-
 		}
 
 		if (allocate_dst) {
@@ -1367,10 +1366,10 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 				q->failsafe_next_packet = now;
 				q->time_next_packet = now;
 			} else if (q->time_next_packet > now && q->failsafe_next_packet > now) {
-				u64 next_time = min(q->time_next_packet,
-						    q->failsafe_next_packet);
+				u64 next = min(q->time_next_packet,
+					       q->failsafe_next_packet);
 				sch->qstats.overlimits++;
-				qdisc_watchdog_schedule_ns(&q->watchdog, next_time);
+				qdisc_watchdog_schedule_ns(&q->watchdog, next);
 			}
 		}
 	}
@@ -1611,10 +1610,9 @@ begin:
 
 	/* global hard shaper */
 	if (q->time_next_packet > now && q->failsafe_next_packet > now) {
-		u64 next_time = (q->time_next_packet < q->failsafe_next_packet)
-			? q->time_next_packet : q->failsafe_next_packet;
+		u64 next = min(q->time_next_packet, q->failsafe_next_packet);
 		sch->qstats.overlimits++;
-		qdisc_watchdog_schedule_ns(&q->watchdog, next_time);
+		qdisc_watchdog_schedule_ns(&q->watchdog, next);
 		return NULL;
 	}
 
@@ -1796,16 +1794,15 @@ retry:
 
 	cake_advance_shaper(q, b, len, now, false);
 	if (q->time_next_packet > now && sch->q.qlen) {
-		u64 next_time = (q->time_next_packet < q->failsafe_next_packet)
-			? q->time_next_packet : q->failsafe_next_packet;
-		qdisc_watchdog_schedule_ns(&q->watchdog, next_time);
+		u64 next = min(q->time_next_packet, q->failsafe_next_packet);
+		qdisc_watchdog_schedule_ns(&q->watchdog, next);
 	} else if (!sch->q.qlen) {
 		int i;
 
 		for (i = 0; i < q->tin_cnt; i++) {
 			if (q->tins[i].decaying_flow_count) {
-				qdisc_watchdog_schedule_ns(&q->watchdog, now +
-							   q->tins[i].cparams.target);
+				u64 next = now + q->tins[i].cparams.target;
+				qdisc_watchdog_schedule_ns(&q->watchdog, next);
 				break;
 			}
 		}
@@ -2479,7 +2476,6 @@ nla_put_failure:
 
 static int cake_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 {
-	/* reuse fq_codel stats format */
 	struct cake_sched_data *q = qdisc_priv(sch);
 	struct tc_cake_xstats *st = kvzalloc(sizeof(*st), GFP_KERNEL);
 	int i;
