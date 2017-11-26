@@ -760,11 +760,12 @@ cake_hash(struct cake_tin_data *q, const struct sk_buff *skb, int flow_mode)
 		u32 i, k;
 		bool allocate_src = false;
 		bool allocate_dst = false;
+		bool found = false;
 
 		/* check if any active queue in the set is reserved for
 		 * this flow.
 		 */
-		for (i = 0, k = inner_hash; i < CAKE_SET_WAYS;
+		for (i = 0, k = inner_hash; !found && i < CAKE_SET_WAYS;
 		     i++, k = (k + 1) % CAKE_SET_WAYS) {
 			if (q->tags[outer_hash + k] == flow_hash) {
 				if (i)
@@ -775,34 +776,34 @@ cake_hash(struct cake_tin_data *q, const struct sk_buff *skb, int flow_mode)
 					allocate_src = ((flow_mode & CAKE_FLOW_DUAL_SRC) == CAKE_FLOW_DUAL_SRC);
 					allocate_dst = ((flow_mode & CAKE_FLOW_DUAL_DST) == CAKE_FLOW_DUAL_DST);
 				}
-
-				goto found;
+				found = true;
 			}
 		}
 
 		/* no queue is reserved for this flow, look for an
 		 * empty one.
 		 */
-		for (i = 0; i < CAKE_SET_WAYS;
+		for (i = 0; !found && i < CAKE_SET_WAYS;
 			 i++, k = (k + 1) % CAKE_SET_WAYS) {
 			if (!q->flows[outer_hash + k].set) {
 				q->way_misses++;
 				allocate_src = ((flow_mode & CAKE_FLOW_DUAL_SRC) == CAKE_FLOW_DUAL_SRC);
 				allocate_dst = ((flow_mode & CAKE_FLOW_DUAL_DST) == CAKE_FLOW_DUAL_DST);
-				goto found;
+				found = true;
 			}
 		}
 
-		/* With no empty queues, default to the original
-		 * queue, accept the collision, update the host tags.
-		 */
-		q->way_collisions++;
-		q->hosts[q->flows[reduced_hash].srchost].srchost_refcnt--;
-		q->hosts[q->flows[reduced_hash].dsthost].dsthost_refcnt--;
-		allocate_src = ((flow_mode & CAKE_FLOW_DUAL_SRC) == CAKE_FLOW_DUAL_SRC);
-		allocate_dst = ((flow_mode & CAKE_FLOW_DUAL_DST) == CAKE_FLOW_DUAL_DST);
+		if (!found) {
+			/* With no empty queues, default to the original
+			 * queue, accept the collision, update the host tags.
+			 */
+			q->way_collisions++;
+			q->hosts[q->flows[reduced_hash].srchost].srchost_refcnt--;
+			q->hosts[q->flows[reduced_hash].dsthost].dsthost_refcnt--;
+			allocate_src = ((flow_mode & CAKE_FLOW_DUAL_SRC) == CAKE_FLOW_DUAL_SRC);
+			allocate_dst = ((flow_mode & CAKE_FLOW_DUAL_DST) == CAKE_FLOW_DUAL_DST);
+		}
 
-found:
 		/* reserve queue for future packets in same flow */
 		reduced_hash = outer_hash + k;
 		q->tags[reduced_hash] = flow_hash;
@@ -811,42 +812,45 @@ found:
 			srchost_idx = srchost_hash % CAKE_QUEUES;
 			inner_hash = srchost_idx % CAKE_SET_WAYS;
 			outer_hash = srchost_idx - inner_hash;
-			for (i = 0, k = inner_hash; i < CAKE_SET_WAYS;
+			found = false;
+			for (i = 0, k = inner_hash; !found && i < CAKE_SET_WAYS;
 				i++, k = (k + 1) % CAKE_SET_WAYS) {
 				if (q->hosts[outer_hash + k].srchost_tag ==
 				    srchost_hash)
-					goto found_src;
+					found = true;
 			}
-			for (i = 0; i < CAKE_SET_WAYS;
-				i++, k = (k + 1) % CAKE_SET_WAYS) {
-				if (!q->hosts[outer_hash + k].srchost_refcnt)
-					break;
+			if (!found) {
+				for (i = 0; I < CAKE_SET_WAYS;
+					i++, k = (k + 1) % CAKE_SET_WAYS) {
+					if (!q->hosts[outer_hash + k].srchost_refcnt)
+						break;
+				}
+				q->hosts[outer_hash + k].srchost_tag = srchost_hash;
 			}
-			q->hosts[outer_hash + k].srchost_tag = srchost_hash;
-found_src:
 			srchost_idx = outer_hash + k;
 			q->hosts[srchost_idx].srchost_refcnt++;
 			q->flows[reduced_hash].srchost = srchost_idx;
-
 		}
 
 		if (allocate_dst) {
 			dsthost_idx = dsthost_hash % CAKE_QUEUES;
 			inner_hash = dsthost_idx % CAKE_SET_WAYS;
 			outer_hash = dsthost_idx - inner_hash;
-			for (i = 0, k = inner_hash; i < CAKE_SET_WAYS;
+			found = false;
+			for (i = 0, k = inner_hash; !found && i < CAKE_SET_WAYS;
 			     i++, k = (k + 1) % CAKE_SET_WAYS) {
 				if (q->hosts[outer_hash + k].dsthost_tag ==
 				    dsthost_hash)
-					goto found_dst;
+					found = true;
 			}
-			for (i = 0; i < CAKE_SET_WAYS;
-			     i++, k = (k + 1) % CAKE_SET_WAYS) {
-				if (!q->hosts[outer_hash + k].dsthost_refcnt)
-					break;
+			if (!found) {
+				for (i = 0; i < CAKE_SET_WAYS;
+				     i++, k = (k + 1) % CAKE_SET_WAYS) {
+					if (!q->hosts[outer_hash + k].dsthost_refcnt)
+						break;
+				}
+				q->hosts[outer_hash + k].dsthost_tag = dsthost_hash;
 			}
-			q->hosts[outer_hash + k].dsthost_tag = dsthost_hash;
-found_dst:
 			dsthost_idx = outer_hash + k;
 			q->hosts[dsthost_idx].dsthost_refcnt++;
 			q->flows[reduced_hash].dsthost = dsthost_idx;
