@@ -1443,13 +1443,13 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 				q->failsafe_next_packet = now;
 				q->time_next_packet = now;
 			} else if (q->time_next_packet > now && q->failsafe_next_packet > now) {
-				u64 next_time = min(q->time_next_packet,
-						    q->failsafe_next_packet);
+				u64 next = min(q->time_next_packet,
+					       q->failsafe_next_packet);
 				sch->qstats.overlimits++;
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 8, 0)
-				codel_watchdog_schedule_ns(&q->watchdog, next_time, true);
+				codel_watchdog_schedule_ns(&q->watchdog, next, true);
 #else
-				qdisc_watchdog_schedule_ns(&q->watchdog, next_time);
+				qdisc_watchdog_schedule_ns(&q->watchdog, next);
 #endif
 			}
 		}
@@ -1699,13 +1699,12 @@ begin:
 
 	/* global hard shaper */
 	if (q->time_next_packet > now && q->failsafe_next_packet > now) {
-		u64 next_time = (q->time_next_packet < q->failsafe_next_packet)
-			? q->time_next_packet : q->failsafe_next_packet;
+		u64 next = min(q->time_next_packet, q->failsafe_next_packet);
 		sch->qstats.overlimits++;
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 8, 0)
-		codel_watchdog_schedule_ns(&q->watchdog, next_time, true);
+		codel_watchdog_schedule_ns(&q->watchdog, next, true);
 #else
-		qdisc_watchdog_schedule_ns(&q->watchdog, next_time);
+		qdisc_watchdog_schedule_ns(&q->watchdog, next);
 #endif
 		return NULL;
 	}
@@ -1892,25 +1891,23 @@ retry:
 
 	cake_advance_shaper(q, b, len, now, false);
 	if (q->time_next_packet > now && sch->q.qlen) {
-		u64 next_time = (q->time_next_packet < q->failsafe_next_packet)
-			? q->time_next_packet : q->failsafe_next_packet;
+		u64 next = min(q->time_next_packet, q->failsafe_next_packet);
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 8, 0)
-		codel_watchdog_schedule_ns(&q->watchdog, next_time, true);
+		codel_watchdog_schedule_ns(&q->watchdog, next, true);
 #else
-		qdisc_watchdog_schedule_ns(&q->watchdog, next_time);
+		qdisc_watchdog_schedule_ns(&q->watchdog, next);
 #endif
 	} else if (!sch->q.qlen) {
 		int i;
 
 		for (i = 0; i < q->tin_cnt; i++) {
 			if (q->tins[i].decaying_flow_count) {
+				u64 next = now + q->tins[i].cparams.target;
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 8, 0)
-				codel_watchdog_schedule_ns(&q->watchdog, now +
-							   q->tins[i].cparams.target,
+				codel_watchdog_schedule_ns(&q->watchdog, next,
 							   true);
 #else
-				qdisc_watchdog_schedule_ns(&q->watchdog, now +
-							   q->tins[i].cparams.target);
+				qdisc_watchdog_schedule_ns(&q->watchdog, next);
 #endif
 				break;
 			}
