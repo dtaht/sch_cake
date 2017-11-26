@@ -418,9 +418,9 @@ static void cobalt_vars_init(struct cobalt_vars *vars)
  * We maintain in rec_inv_sqrt the reciprocal value of sqrt(count) to avoid
  * both sqrt() and divide operation.
  */
-static cobalt_time_t cobalt_control_law(cobalt_time_t t,
-					cobalt_time_t interval,
-					u32 rec_inv_sqrt)
+static cobalt_time_t cobalt_control(cobalt_time_t t,
+				    cobalt_time_t interval,
+				    u32 rec_inv_sqrt)
 {
 	return t + reciprocal_scale(interval, rec_inv_sqrt);
 }
@@ -471,9 +471,9 @@ static bool cobalt_queue_empty(struct cobalt_vars *vars,
 	if (vars->count && (now - vars->drop_next) >= 0) {
 		vars->count--;
 		cobalt_invsqrt(vars);
-		vars->drop_next = cobalt_control_law(vars->drop_next,
-						     p->interval,
-						     vars->rec_inv_sqrt);
+		vars->drop_next = cobalt_control(vars->drop_next,
+						 p->interval,
+						 vars->rec_inv_sqrt);
 	}
 
 	return down;
@@ -485,7 +485,7 @@ static bool cobalt_queue_empty(struct cobalt_vars *vars,
 static bool cobalt_should_drop(struct cobalt_vars *vars,
 			       struct cobalt_params *p,
 			       cobalt_time_t now,
-			struct sk_buff *skb)
+			       struct sk_buff *skb)
 {
 	bool drop = false;
 
@@ -516,9 +516,9 @@ static bool cobalt_should_drop(struct cobalt_vars *vars,
 	if (over_target) {
 		if (!vars->dropping) {
 			vars->dropping = true;
-			vars->drop_next = cobalt_control_law(now,
-							     p->interval,
-							     vars->rec_inv_sqrt);
+			vars->drop_next = cobalt_control(now,
+							 p->interval,
+							 vars->rec_inv_sqrt);
 		}
 		if (!vars->count)
 			vars->count = 1;
@@ -534,17 +534,17 @@ static bool cobalt_should_drop(struct cobalt_vars *vars,
 		if (!vars->count)
 			vars->count--;
 		cobalt_invsqrt(vars);
-		vars->drop_next = cobalt_control_law(vars->drop_next,
-						     p->interval,
-						     vars->rec_inv_sqrt);
+		vars->drop_next = cobalt_control(vars->drop_next,
+						 p->interval,
+						 vars->rec_inv_sqrt);
 		schedule = now - vars->drop_next;
 	} else {
 		while (next_due) {
 			vars->count--;
 			cobalt_invsqrt(vars);
-			vars->drop_next = cobalt_control_law(vars->drop_next,
-							     p->interval,
-							     vars->rec_inv_sqrt);
+			vars->drop_next = cobalt_control(vars->drop_next,
+							 p->interval,
+							 vars->rec_inv_sqrt);
 			schedule = now - vars->drop_next;
 			next_due = vars->count && schedule >= 0;
 		}
