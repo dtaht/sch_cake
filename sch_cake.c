@@ -2595,7 +2595,6 @@ nla_put_failure:
 
 static int cake_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 {
-	/* reuse fq_codel stats format */
 	struct cake_sched_data *q = qdisc_priv(sch);
 	struct tc_cake_xstats *st = cake_zalloc(sizeof(*st));
 	int i;
