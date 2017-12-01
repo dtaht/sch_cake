@@ -55,14 +55,12 @@
 #include <linux/version.h>
 #include <net/netlink.h>
 #include <net/pkt_sched.h>
-#include <linux/if_vlan.h>
 #include <net/tcp.h>
 #include <net/flow_dissector.h>
 #include <net/cobalt.h>
 
 #if IS_ENABLED(CONFIG_NF_CONNTRACK)
 #include <net/netfilter/nf_conntrack_core.h>
-#include <net/netfilter/nf_conntrack_zones.h>
 #include <net/netfilter/nf_conntrack.h>
 #endif
 
