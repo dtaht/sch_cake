@@ -119,11 +119,11 @@
 #define CAKE_MAX_TINS (8)
 #define CAKE_QUEUES (1024)
 
-#ifndef CAKE_VERSION
-#define CAKE_VERSION "unknown"
+#ifndef CAKE_GIT_REVISION
+#define CAKE_GIT_REVISION "unknown"
 #endif
-static char *cake_version __attribute__((used)) = "Cake version: "
-		CAKE_VERSION;
+static char *cake_git_revision __attribute__((used)) = "gitrevision="
+		CAKE_GIT_REVISION;
 
 enum {
 	CAKE_SET_NONE = 0,
@@ -2680,4 +2680,5 @@ module_init(cake_module_init)
 module_exit(cake_module_exit)
 MODULE_AUTHOR("Jonathan Morton");
 MODULE_LICENSE("Dual BSD/GPL");
-MODULE_DESCRIPTION("The Cake shaper. Version: " CAKE_VERSION);
+MODULE_DESCRIPTION("The CAKE queue discipline: deficit-mode shaping, AQM and FQ.");
+MODULE_INFO(gitrevision, CAKE_GIT_REVISION);
