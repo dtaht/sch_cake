@@ -494,7 +494,8 @@ static bool cobalt_queue_empty(struct cobalt_vars *vars,
 static bool cobalt_should_drop(struct cobalt_vars *vars,
 			       struct cobalt_params *p,
 			       cobalt_time_t now,
-			       struct sk_buff *skb)
+			       struct sk_buff *skb,
+			       u32 bulk_flows)
 {
 	bool drop = false;
 
@@ -517,7 +518,8 @@ static bool cobalt_should_drop(struct cobalt_vars *vars,
  */
 
 	cobalt_tdiff_t schedule = now - vars->drop_next;
-	bool over_target = sojourn > p->target;
+	bool over_target = sojourn > p->target &&
+	                   sojourn > p->mtu_time * (bulk_flows+1);
 	bool next_due    = vars->count && schedule >= 0;
 
 	vars->ecn_marked = false;
@@ -1853,8 +1855,8 @@ retry:
 		}
 
 		/* Last packet in queue may be marked, shouldn't be dropped */
-		if (!cobalt_should_drop(&flow->cvars, &b->cparams, now, skb) ||
-		    !flow->head)
+		if (!cobalt_should_drop(&flow->cvars, &b->cparams, now, skb,
+			b->bulk_flow_count) || !flow->head)
 			break;
 
 		/* drop this packet, get another one */
@@ -1959,7 +1961,7 @@ static void cake_set_rate(struct cake_tin_data *b, u64 rate, u32 mtu,
 	u64 rate_ns = 0;
 	u8  rate_shft = 0;
 	cobalt_time_t byte_target_ns;
-	u32 byte_target = mtu + (mtu >> 1);
+	u32 byte_target = mtu;
 
 	b->flow_quantum = 1514;
 	if (rate) {
@@ -1979,10 +1981,11 @@ static void cake_set_rate(struct cake_tin_data *b, u64 rate, u32 mtu,
 
 	byte_target_ns = (byte_target * rate_ns) >> rate_shft;
 
-	b->cparams.target = max(byte_target_ns, ns_target);
+	b->cparams.target = max((byte_target_ns*3)/2, ns_target);
 	b->cparams.interval = max(rtt_est_ns +
 				     b->cparams.target - ns_target,
 				     b->cparams.target * 2);
+	b->cparams.mtu_time = byte_target_ns;
 	b->cparams.p_inc = 1 << 24; /* 1/256 */
 	b->cparams.p_dec = 1 << 20; /* 1/4096 */
 }

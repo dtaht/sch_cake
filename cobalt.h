@@ -103,12 +103,14 @@ static inline void cobalt_set_enqueue_time(struct sk_buff *skb,
  * struct cobalt_params - contains codel and blue parameters
  * @interval:	codel initial drop rate
  * @target:     maximum persistent sojourn time & blue update rate
+ * @mtu_time:   serialisation delay of maximum-size packet
  * @p_inc:      increment of blue drop probability (0.32 fxp)
  * @p_dec:      decrement of blue drop probability (0.32 fxp)
  */
 struct cobalt_params {
 	cobalt_time_t	interval;
 	cobalt_time_t	target;
+	cobalt_time_t	mtu_time;
 	u32		p_inc;
 	u32		p_dec;
 };
@@ -154,6 +156,7 @@ static bool cobalt_queue_empty(struct cobalt_vars *vars,
 static bool cobalt_should_drop(struct cobalt_vars *vars,
 			       struct cobalt_params *p,
 			       cobalt_time_t now,
-			       struct sk_buff *skb);
+			       struct sk_buff *skb,
+			       u32 bulk_flows);
 
 #endif
