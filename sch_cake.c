@@ -519,7 +519,7 @@ static bool cobalt_should_drop(struct cobalt_vars *vars,
 
 	cobalt_tdiff_t schedule = now - vars->drop_next;
 	bool over_target = sojourn > p->target &&
-	                   sojourn > p->mtu_time * (bulk_flows+1);
+	                   sojourn > p->mtu_time * bulk_flows * 4;
 	bool next_due    = vars->count && schedule >= 0;
 
 	vars->ecn_marked = false;
