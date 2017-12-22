@@ -1891,7 +1891,7 @@ retry:
 	b->base_delay = cake_ewma(b->base_delay, delay,
 				  delay < b->base_delay ? 2 : 8);
 
-	len = cake_advance_shaper(q, b, len, now, false);
+	len = cake_advance_shaper(q, b, qdisc_pkt_len(skb), now, false);
 	flow->deficit -= len;
 	b->tin_deficit -= len;
 
