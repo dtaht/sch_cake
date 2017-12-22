@@ -1883,10 +1883,6 @@ retry:
 	b->tin_ecn_mark += !!flow->cvars.ecn_marked;
 	qdisc_bstats_update(sch, skb);
 
-	len = cake_overhead(q, qdisc_pkt_len(skb));
-	flow->deficit -= len;
-	b->tin_deficit -= len;
-
 	/* collect delay stats */
 	delay = now - cobalt_get_enqueue_time(skb);
 	b->avge_delay = cake_ewma(b->avge_delay, delay, 8);
@@ -1895,7 +1891,10 @@ retry:
 	b->base_delay = cake_ewma(b->base_delay, delay,
 				  delay < b->base_delay ? 2 : 8);
 
-	cake_advance_shaper(q, b, len, now, false);
+	len = cake_advance_shaper(q, b, len, now, false);
+	flow->deficit -= len;
+	b->tin_deficit -= len;
+
 	if (q->time_next_packet > now && sch->q.qlen) {
 		u64 next = min(q->time_next_packet, q->failsafe_next_packet);
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 8, 0)
