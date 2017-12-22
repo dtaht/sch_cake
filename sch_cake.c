@@ -151,7 +151,6 @@ struct cake_host {
 	u32 dsthost_tag;
 	u16 srchost_refcnt;
 	u16 dsthost_refcnt;
-	u32 pad;
 };
 
 struct cake_heap_entry {
@@ -1959,7 +1958,7 @@ static void cake_set_rate(struct cake_tin_data *b, u64 rate, u32 mtu,
 	 */
 	static const u64 MIN_RATE = 64;
 	u64 rate_ns = 0;
-	u8  rate_shft = 2;
+	u8  rate_shft = 0;
 	cobalt_time_t byte_target_ns;
 	u32 byte_target = mtu;
 
