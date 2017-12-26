@@ -964,33 +964,39 @@ struct tc_cake_traffic_stats {
 };
 
 #define TC_CAKE_MAX_TINS (8)
-struct tc_cake_xstats {
-	__u16 version;  /* == 5, increments when struct extended */
-	__u8  max_tins; /* == TC_CAKE_MAX_TINS */
-	__u8  tin_cnt;  /* <= TC_CAKE_MAX_TINS */
+struct tc_cake_tin_stats {
 
-	__u32 threshold_rate[TC_CAKE_MAX_TINS];
-	__u32 target_us[TC_CAKE_MAX_TINS];
-	struct tc_cake_traffic_stats sent[TC_CAKE_MAX_TINS];
-	struct tc_cake_traffic_stats dropped[TC_CAKE_MAX_TINS];
-	struct tc_cake_traffic_stats ecn_marked[TC_CAKE_MAX_TINS];
-	struct tc_cake_traffic_stats backlog[TC_CAKE_MAX_TINS];
-	__u32 interval_us[TC_CAKE_MAX_TINS];
-	__u32 way_indirect_hits[TC_CAKE_MAX_TINS];
-	__u32 way_misses[TC_CAKE_MAX_TINS];
-	__u32 way_collisions[TC_CAKE_MAX_TINS];
-	__u32 peak_delay_us[TC_CAKE_MAX_TINS]; /* ~= bulk flow delay */
-	__u32 avge_delay_us[TC_CAKE_MAX_TINS];
-	__u32 base_delay_us[TC_CAKE_MAX_TINS]; /* ~= sparse flows delay */
-	__u16 sparse_flows[TC_CAKE_MAX_TINS];
-	__u16 bulk_flows[TC_CAKE_MAX_TINS];
-	__u16 unresponse_flows[TC_CAKE_MAX_TINS]; /* v4 - was u32 last_len */
-	__u16 spare[TC_CAKE_MAX_TINS]; /* v4 - split last_len */
-	__u32 max_skblen[TC_CAKE_MAX_TINS];
-	__u32 capacity_estimate;  /* version 2 */
-	__u32 memory_limit;       /* version 3 */
-	__u32 memory_used;	  /* version 3 */
-	struct tc_cake_traffic_stats ack_drops[TC_CAKE_MAX_TINS]; /* v5 */
+	__u32 threshold_rate;
+	__u32 target_us;
+	struct tc_cake_traffic_stats sent;
+	struct tc_cake_traffic_stats dropped;
+	struct tc_cake_traffic_stats ecn_marked;
+	struct tc_cake_traffic_stats backlog;
+	__u32 interval_us;
+	__u32 way_indirect_hits;
+	__u32 way_misses;
+	__u32 way_collisions;
+	__u32 peak_delay_us; /* ~= bulk flow delay */
+	__u32 avge_delay_us;
+	__u32 base_delay_us; /* ~= sparse flows delay */
+	__u16 sparse_flows;
+	__u16 bulk_flows;
+	__u16 unresponse_flows;
+	__u16 spare;
+	__u32 max_skblen;
+	struct tc_cake_traffic_stats ack_drops;
 };
+
+struct tc_cake_xstats {
+	__u16 version;
+	__u16 tin_stats_size; /* == sizeof(struct tc_cake_tin_stats) */
+	__u32 capacity_estimate;
+	__u32 memory_limit;
+	__u32 memory_used;
+	__u8  tin_cnt;
+
+	struct tc_cake_tin_stats tin_stats[0]; /* keep last */
+};
+
 
 #endif

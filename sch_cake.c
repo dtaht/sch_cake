@@ -2478,51 +2478,55 @@ nla_put_failure:
 static int cake_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 {
 	struct cake_sched_data *q = qdisc_priv(sch);
-	struct tc_cake_xstats *st = kvzalloc(sizeof(*st), GFP_KERNEL);
+	struct tc_cake_xstats *st;
+	size_t size = sizeof(*st) + sizeof(struct tc_cake_tin_stats) * q->tin_cnt;
 	int i;
+
+	st = kvzalloc(size, GFP_KERNEL);
 
 	if (!st)
 		return -ENOMEM;
 
-	st->version = 5;
-	st->max_tins = TC_CAKE_MAX_TINS;
+	st->version = 0xFF + 1; /* old userspace code discards versions > 0xFF */
+	st->tin_stats_size = sizeof(struct tc_cake_tin_stats);
 	st->tin_cnt = q->tin_cnt;
 
 	for (i = 0; i < q->tin_cnt; i++) {
 		struct cake_tin_data *b = &q->tins[q->tin_order[i]];
+		struct tc_cake_tin_stats *tstat = &st->tin_stats[i];
 
-		st->threshold_rate[i] = b->tin_rate_bps;
-		st->target_us[i]      = cobalt_time_to_us(b->cparams.target);
-		st->interval_us[i]    = cobalt_time_to_us(b->cparams.interval);
+		tstat->threshold_rate = b->tin_rate_bps;
+		tstat->target_us      = cobalt_time_to_us(b->cparams.target);
+		tstat->interval_us    = cobalt_time_to_us(b->cparams.interval);
 
 		/* TODO FIXME: add missing aspects of these composite stats */
-		st->sent[i].packets       = b->packets;
-		st->sent[i].bytes	  = b->bytes;
-		st->dropped[i].packets    = b->tin_dropped;
-		st->ecn_marked[i].packets = b->tin_ecn_mark;
-		st->backlog[i].bytes      = b->tin_backlog;
-		st->ack_drops[i].packets  = b->ack_drops;
+		tstat->sent.packets       = b->packets;
+		tstat->sent.bytes	  = b->bytes;
+		tstat->dropped.packets    = b->tin_dropped;
+		tstat->ecn_marked.packets = b->tin_ecn_mark;
+		tstat->backlog.bytes      = b->tin_backlog;
+		tstat->ack_drops.packets  = b->ack_drops;
 
-		st->peak_delay_us[i] = cobalt_time_to_us(b->peak_delay);
-		st->avge_delay_us[i] = cobalt_time_to_us(b->avge_delay);
-		st->base_delay_us[i] = cobalt_time_to_us(b->base_delay);
+		tstat->peak_delay_us = cobalt_time_to_us(b->peak_delay);
+		tstat->avge_delay_us = cobalt_time_to_us(b->avge_delay);
+		tstat->base_delay_us = cobalt_time_to_us(b->base_delay);
 
-		st->way_indirect_hits[i] = b->way_hits;
-		st->way_misses[i]	 = b->way_misses;
-		st->way_collisions[i]    = b->way_collisions;
+		tstat->way_indirect_hits = b->way_hits;
+		tstat->way_misses	 = b->way_misses;
+		tstat->way_collisions    = b->way_collisions;
 
-		st->sparse_flows[i]      = b->sparse_flow_count +
+		tstat->sparse_flows      = b->sparse_flow_count +
 					   b->decaying_flow_count;
-		st->bulk_flows[i]	 = b->bulk_flow_count;
-		st->unresponse_flows[i]  = b->unresponsive_flow_count;
-		st->spare[i]		 = 0;
-		st->max_skblen[i]	 = b->max_skblen;
+		tstat->bulk_flows	 = b->bulk_flow_count;
+		tstat->unresponse_flows  = b->unresponsive_flow_count;
+		tstat->spare		 = 0;
+		tstat->max_skblen	 = b->max_skblen;
 	}
 	st->capacity_estimate = q->avg_peak_bandwidth;
 	st->memory_limit      = q->buffer_limit;
 	st->memory_used       = q->buffer_max_used;
 
-	i = gnet_stats_copy_app(d, st, sizeof(*st));
+	i = gnet_stats_copy_app(d, st, size);
 	cake_free(st);
 	return i;
 }
