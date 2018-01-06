@@ -2312,8 +2312,10 @@ static void cake_reconfigure(struct Qdisc *sch)
 		break;
 	};
 
-	for (c = q->tin_cnt; c < CAKE_MAX_TINS; c++)
+	for (c = q->tin_cnt; c < CAKE_MAX_TINS; c++) {
 		cake_clear_tin(sch, c);
+		q->tins[c].cparams.mtu_time = q->tins[ft].cparams.mtu_time;
+	}
 
 	q->rate_ns   = q->tins[ft].tin_rate_ns;
 	q->rate_shft = q->tins[ft].tin_rate_shft;
