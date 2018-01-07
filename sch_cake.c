@@ -1821,7 +1821,7 @@ retry:
 				b->unresponsive_flow_count--;
 
 			if (flow->cvars.p_drop || flow->cvars.count ||
-			    (now - flow->cvars.drop_next) < 0) {
+			    now < flow->cvars.drop_next) {
 				/* keep in the flowchain until the state has
 				 * decayed to rest
 				 */
