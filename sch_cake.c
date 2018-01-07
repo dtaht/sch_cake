@@ -1012,7 +1012,7 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 		 * must be 'pure' ACK, contain zero bytes of segment data
 		 * options are ignored
 		 */
-		if ((tcp_flag_word(tcph) &
+		if ((tcp_flag_word(tcph_check) &
 			(TCP_FLAG_ACK | TCP_FLAG_SYN)) != TCP_FLAG_ACK) {
 			continue;
 		} else if (((tcp_flag_word(tcph_check) &
