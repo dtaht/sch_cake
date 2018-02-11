@@ -1272,18 +1272,19 @@ static void cake_heapify_up(struct cake_sched_data *q, u16 i)
 
 static int cake_advance_shaper(struct cake_sched_data *q,
 			       struct cake_tin_data *b,
-			       u32 len, u64 now, bool drop)
+			       struct sk_buff *skb,
+			       u64 now, bool drop)
 {
-	s64 tdiff1, tdiff2, tdiff3, tdiff4;
+	u32 len = get_cobalt_cb(skb)->len_adjust;
+
 	/* charge packet bandwidth to this tin
 	 * and to the global shaper.
 	 */
 	if (q->rate_ns) {
-		len = cake_overhead(q, len);
-		tdiff1 = b->tin_time_next_packet - now;
-		tdiff2 = (len * (u64)b->tin_rate_ns) >> b->tin_rate_shft;
-		tdiff3 = (len * (u64)q->rate_ns) >> q->rate_shft;
-		tdiff4 = tdiff3 + (tdiff3 >> 1);
+		s64 tdiff1 = b->tin_time_next_packet - now;
+		s64 tdiff2 = (len * (u64)b->tin_rate_ns) >> b->tin_rate_shft;
+		s64 tdiff3 = (len * (u64)q->rate_ns) >> q->rate_shft;
+		s64 tdiff4 = tdiff3 + (tdiff3 >> 1);
 
 		if (tdiff1 < 0)
 			b->tin_time_next_packet += tdiff2;
@@ -1347,7 +1348,7 @@ static unsigned int cake_drop(struct Qdisc *sch, struct sk_buff **to_free)
 	sch->qstats.drops++;
 
 	if (q->rate_flags & CAKE_FLAG_INGRESS)
-		cake_advance_shaper(q, b, len, now, true);
+		cake_advance_shaper(q, b, skb, now, true);
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 8, 0)
 	kfree_skb(skb);
@@ -1488,6 +1489,7 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 			segs->next = NULL;
 			qdisc_skb_cb(segs)->pkt_len = segs->len;
 			cobalt_set_enqueue_time(segs, now);
+			get_cobalt_cb(segs)->len_adjust = cake_overhead(q, segs->len);
 			flow_queue_add(flow, segs);
 
 			if (q->rate_flags & CAKE_FLAG_ACK_FILTER)
@@ -1501,8 +1503,7 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 				q->buffer_used += segs->truesize -
 					ack->truesize;
 				if (q->rate_flags & CAKE_FLAG_INGRESS)
-					cake_advance_shaper(q, b,
-							    qdisc_pkt_len(ack),
+					cake_advance_shaper(q, b, ack,
 							    now, true);
 
 				qdisc_tree_reduce_backlog(sch, 1,
@@ -1528,6 +1529,7 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 	} else {
 		/* not splitting */
 		cobalt_set_enqueue_time(skb, now);
+		get_cobalt_cb(skb)->len_adjust = cake_overhead(q, len);
 		flow_queue_add(flow, skb);
 
 		if (q->rate_flags & CAKE_FLAG_ACK_FILTER)
@@ -1540,7 +1542,7 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 			len -= qdisc_pkt_len(ack);
 			q->buffer_used += skb->truesize - ack->truesize;
 			if (q->rate_flags & CAKE_FLAG_INGRESS)
-				cake_advance_shaper(q, b, ack->len, now, true);
+				cake_advance_shaper(q, b, ack, now, true);
 
 			qdisc_tree_reduce_backlog(sch, 1, qdisc_pkt_len(ack));
 			consume_skb(ack);
@@ -1861,8 +1863,7 @@ retry:
 
 		/* drop this packet, get another one */
 		if (q->rate_flags & CAKE_FLAG_INGRESS) {
-			len = cake_advance_shaper(q, b,
-						  qdisc_pkt_len(skb),
+			len = cake_advance_shaper(q, b, skb,
 						  now, true);
 			flow->deficit -= len;
 			b->tin_deficit -= len;
@@ -1890,7 +1891,7 @@ retry:
 	b->base_delay = cake_ewma(b->base_delay, delay,
 				  delay < b->base_delay ? 2 : 8);
 
-	len = cake_advance_shaper(q, b, qdisc_pkt_len(skb), now, false);
+	len = cake_advance_shaper(q, b, skb, now, false);
 	flow->deficit -= len;
 	b->tin_deficit -= len;
 
