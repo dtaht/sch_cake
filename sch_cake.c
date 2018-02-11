@@ -252,6 +252,13 @@ struct cake_sched_data {
 	u32		avg_window_bytes;
 	u32		avg_peak_bandwidth;
 	u64		last_reconfig_time;
+
+	/* packet length stats */
+	u32 avg_trnoff;
+	u16 max_trnlen;
+	u16 max_adjlen;
+	u16 min_trnlen;
+	u16 min_adjlen;
 };
 
 enum {
@@ -1169,12 +1176,30 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 	return skb_check;
 }
 
+static inline cobalt_time_t cake_ewma(cobalt_time_t avg, cobalt_time_t sample,
+				      u32 shift)
+{
+	avg -= avg >> shift;
+	avg += sample >> shift;
+	return avg;
+}
+
 static inline u32 cake_overhead(struct cake_sched_data *q, struct sk_buff *skb)
 {
-	u32 len = qdisc_pkt_len(skb) + q->rate_overhead;
+	u32 len = qdisc_pkt_len(skb);
+	u32 off = skb_network_offset(skb);
+
+	q->avg_trnoff = cake_ewma(q->avg_trnoff, off << 16, 8);
 
 	if (q->rate_flags & CAKE_FLAG_OVERHEAD)
-		len -= skb_network_offset(skb);
+		len -= off;
+
+	if (q->max_trnlen < len)
+		q->max_trnlen = len;
+	if (q->min_trnlen > len)
+		q->min_trnlen = len;
+
+	len += q->rate_overhead;
 
 	if (len < q->rate_mpu)
 		len = q->rate_mpu;
@@ -1191,16 +1216,13 @@ static inline u32 cake_overhead(struct cake_sched_data *q, struct sk_buff *skb)
 		len += (len+63) / 64;
 	}
 
-	get_cobalt_cb(segs)->adjusted_len = len;
-	return len;
-}
+	if (q->max_adjlen < len)
+		q->max_adjlen = len;
+	if (q->min_adjlen > len)
+		q->min_adjlen = len;
 
-static inline cobalt_time_t cake_ewma(cobalt_time_t avg, cobalt_time_t sample,
-				      u32 shift)
-{
-	avg -= avg >> shift;
-	avg += sample >> shift;
-	return avg;
+	get_cobalt_cb(skb)->adjusted_len = len;
+	return len;
 }
 
 static inline void cake_heap_swap(struct cake_sched_data *q, u16 i, u16 j)
@@ -1494,7 +1516,7 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 			segs->next = NULL;
 			qdisc_skb_cb(segs)->pkt_len = segs->len;
 			cobalt_set_enqueue_time(segs, now);
-			get_cobalt_cb(segs)->adjusted_len = cake_overhead(q, segs->len);
+			get_cobalt_cb(segs)->adjusted_len = cake_overhead(q, segs);
 			flow_queue_add(flow, segs);
 
 			if (q->rate_flags & CAKE_FLAG_ACK_FILTER)
@@ -1534,7 +1556,7 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 	} else {
 		/* not splitting */
 		cobalt_set_enqueue_time(skb, now);
-		get_cobalt_cb(skb)->adjusted_len = cake_overhead(q, len);
+		get_cobalt_cb(skb)->adjusted_len = cake_overhead(q, skb);
 		flow_queue_add(flow, skb);
 
 		if (q->rate_flags & CAKE_FLAG_ACK_FILTER)
@@ -1949,7 +1971,7 @@ static const struct nla_policy cake_policy[TCA_CAKE_MAX + 1] = {
 	[TCA_CAKE_AUTORATE]      = { .type = NLA_U32 },
 	[TCA_CAKE_MEMORY]	 = { .type = NLA_U32 },
 	[TCA_CAKE_NAT]		 = { .type = NLA_U32 },
-	[TCA_CAKE_ETHERNET]      = { .type = NLA_U32 },
+	[TCA_CAKE_RAW]       = { .type = NLA_U32 },
 	[TCA_CAKE_WASH]		 = { .type = NLA_U32 },
 	[TCA_CAKE_MPU]		 = { .type = NLA_U32 },
 	[TCA_CAKE_INGRESS]	 = { .type = NLA_U32 },
