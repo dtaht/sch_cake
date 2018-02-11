@@ -267,6 +267,7 @@ enum {
 enum {
 	CAKE_FLAG_ATM = 0x0001,
 	CAKE_FLAG_PTM = 0x0002,
+	CAKE_FLAG_OVERHEAD = 0x0008,
 	CAKE_FLAG_AUTORATE_INGRESS = 0x0010,
 	CAKE_FLAG_INGRESS = 0x0040,
 	CAKE_FLAG_WASH = 0x0100,
@@ -1168,26 +1169,30 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 	return skb_check;
 }
 
-static inline u32 cake_overhead(struct cake_sched_data *q, u32 in)
+static inline u32 cake_overhead(struct cake_sched_data *q, struct sk_buff *skb)
 {
-	u32 out = in + q->rate_overhead;
+	u32 len = qdisc_pkt_len(skb) + q->rate_overhead;
 
-	if (q->rate_mpu && out < q->rate_mpu)
-		out = q->rate_mpu;
+	if (q->rate_flags & CAKE_FLAG_OVERHEAD)
+		len -= skb_network_offset(skb);
+
+	if (len < q->rate_mpu)
+		len = q->rate_mpu;
 
 	if (q->rate_flags & CAKE_FLAG_ATM) {
-		out += 47;
-		out /= 48;
-		out *= 53;
+		len += 47;
+		len /= 48;
+		len *= 53;
 	} else if (q->rate_flags & CAKE_FLAG_PTM) {
 		/* Add one byte per 64 bytes or part thereof.
 		 * This is conservative and easier to calculate than the
 		 * precise value.
 		 */
-		out += (out+63) / 64;
+		len += (len+63) / 64;
 	}
 
-	return out;
+	get_cobalt_cb(segs)->adjusted_len = len;
+	return len;
 }
 
 static inline cobalt_time_t cake_ewma(cobalt_time_t avg, cobalt_time_t sample,
@@ -1275,7 +1280,7 @@ static int cake_advance_shaper(struct cake_sched_data *q,
 			       struct sk_buff *skb,
 			       u64 now, bool drop)
 {
-	u32 len = get_cobalt_cb(skb)->len_adjust;
+	u32 len = get_cobalt_cb(skb)->adjusted_len;
 
 	/* charge packet bandwidth to this tin
 	 * and to the global shaper.
@@ -1489,7 +1494,7 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 			segs->next = NULL;
 			qdisc_skb_cb(segs)->pkt_len = segs->len;
 			cobalt_set_enqueue_time(segs, now);
-			get_cobalt_cb(segs)->len_adjust = cake_overhead(q, segs->len);
+			get_cobalt_cb(segs)->adjusted_len = cake_overhead(q, segs->len);
 			flow_queue_add(flow, segs);
 
 			if (q->rate_flags & CAKE_FLAG_ACK_FILTER)
@@ -1529,7 +1534,7 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 	} else {
 		/* not splitting */
 		cobalt_set_enqueue_time(skb, now);
-		get_cobalt_cb(skb)->len_adjust = cake_overhead(q, len);
+		get_cobalt_cb(skb)->adjusted_len = cake_overhead(q, len);
 		flow_queue_add(flow, skb);
 
 		if (q->rate_flags & CAKE_FLAG_ACK_FILTER)
@@ -2383,12 +2388,12 @@ static int cake_change(struct Qdisc *sch, struct nlattr *opt)
 	}
 
 	if (tb[TCA_CAKE_OVERHEAD]) {
-		if (tb[TCA_CAKE_ETHERNET])
-			q->rate_overhead = -(nla_get_s32(tb[TCA_CAKE_ETHERNET]));
-		else
-			q->rate_overhead = -(qdisc_dev(sch)->hard_header_len);
+		q->rate_overhead = nla_get_s32(tb[TCA_CAKE_OVERHEAD]);
+		q->rate_flags |= CAKE_FLAG_OVERHEAD;
+	}
 
-		q->rate_overhead += nla_get_s32(tb[TCA_CAKE_OVERHEAD]);
+	if (tb[TCA_CAKE_RAW]) {
+		q->rate_flags &= ~CAKE_FLAG_OVERHEAD;
 	}
 
 	if (tb[TCA_CAKE_MPU])
@@ -2562,16 +2567,15 @@ static int cake_dump(struct Qdisc *sch, struct sk_buff *skb)
 			!!(q->rate_flags & CAKE_FLAG_WASH)))
 		goto nla_put_failure;
 
-	if (nla_put_u32(skb, TCA_CAKE_OVERHEAD, q->rate_overhead +
-			qdisc_dev(sch)->hard_header_len))
+	if (nla_put_u32(skb, TCA_CAKE_OVERHEAD, q->rate_overhead))
 		goto nla_put_failure;
 
 	if (nla_put_u32(skb, TCA_CAKE_MPU, q->rate_mpu))
 		goto nla_put_failure;
 
-	if (nla_put_u32(skb, TCA_CAKE_ETHERNET,
-			qdisc_dev(sch)->hard_header_len))
-		goto nla_put_failure;
+	if (!(q->rate_flags & CAKE_FLAG_OVERHEAD))
+		if (nla_put_u32(skb, TCA_CAKE_RAW, 0))
+			goto nla_put_failure;
 
 	if (nla_put_u32(skb, TCA_CAKE_RTT, q->interval))
 		goto nla_put_failure;
