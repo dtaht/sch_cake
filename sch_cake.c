@@ -1220,11 +1220,19 @@ static inline u32 cake_overhead(struct cake_sched_data *q, struct sk_buff *skb)
 		q->max_adjlen = len;
 	if (q->min_adjlen > len)
 		q->min_adjlen = len;
+<<<<<<< HEAD
 
 	get_cobalt_cb(skb)->adjusted_len = len;
 	return len;
 }
 
+=======
+
+	get_cobalt_cb(segs)->adjusted_len = len;
+	return len;
+}
+
+>>>>>>> 71c7b447ce87a1897bfe8bf6ea745be6ef29d649
 static inline void cake_heap_swap(struct cake_sched_data *q, u16 i, u16 j)
 {
 	struct cake_heap_entry ii = q->overflow_heap[i];
