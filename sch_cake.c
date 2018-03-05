@@ -2639,9 +2639,15 @@ static int cake_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 	if (!st)
 		return -1;
 
-	st->version = 0xFF + 1; /* old userspace code discards versions > 0xFF */
+	st->version = 0x101; /* old userspace code discards versions > 0xFF */
 	st->tin_stats_size = sizeof(struct tc_cake_tin_stats);
 	st->tin_cnt = q->tin_cnt;
+
+	st->avg_trnoff = (q->avg_trnoff + 0x8000) >> 16;
+	st->max_trnlen = q->max_trnlen;
+	st->max_adjlen = q->max_adjlen;
+	st->min_trnlen = q->min_trnlen;
+	st->min_adjlen = q->min_adjlen;
 
 	for (i = 0; i < q->tin_cnt; i++) {
 		struct cake_tin_data *b = &q->tins[q->tin_order[i]];

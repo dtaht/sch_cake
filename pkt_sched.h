@@ -917,6 +917,14 @@ struct tc_cake_xstats {
 	__u32 memory_limit;
 	__u32 memory_used;
 	__u8  tin_cnt;
+	__u8  avg_trnoff;
+	__u16 max_trnlen;
+	__u16 max_adjlen;
+	__u16 min_trnlen;
+	__u16 min_adjlen;
+
+	__u16 spare1;
+	__u32 spare2;
 
 	struct tc_cake_tin_stats tin_stats[0]; /* keep last */
 };
