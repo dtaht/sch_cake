@@ -2412,10 +2412,16 @@ static int cake_change(struct Qdisc *sch, struct nlattr *opt)
 	if (tb[TCA_CAKE_OVERHEAD]) {
 		q->rate_overhead = nla_get_s32(tb[TCA_CAKE_OVERHEAD]);
 		q->rate_flags |= CAKE_FLAG_OVERHEAD;
+
+		q->max_trnlen = q->max_adjlen = 0;
+		q->min_trnlen = q->min_adjlen = ~0;
 	}
 
 	if (tb[TCA_CAKE_RAW]) {
 		q->rate_flags &= ~CAKE_FLAG_OVERHEAD;
+
+		q->max_trnlen = q->max_adjlen = 0;
+		q->min_trnlen = q->min_adjlen = ~0;
 	}
 
 	if (tb[TCA_CAKE_MPU])
@@ -2556,6 +2562,7 @@ static int cake_init(struct Qdisc *sch, struct nlattr *opt)
 
 	cake_reconfigure(sch);
 	q->avg_peak_bandwidth = q->rate_bps;
+	q->min_trnlen = q->min_adjlen = ~0;
 	return 0;
 
 nomem:
