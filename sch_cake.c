@@ -2364,7 +2364,12 @@ static void cake_reconfigure(struct Qdisc *sch)
 	q->buffer_limit = min(q->buffer_limit, max(sch->limit * psched_mtu(qdisc_dev(sch)), q->buffer_config_limit));
 }
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 16, 0)
 static int cake_change(struct Qdisc *sch, struct nlattr *opt)
+#else
+static int cake_change(struct Qdisc *sch, struct nlattr *opt,
+		struct netlink_ext_ack *extack)
+#endif
 {
 	struct cake_sched_data *q = qdisc_priv(sch);
 	struct nlattr *tb[TCA_CAKE_MAX + 1];
@@ -2375,8 +2380,10 @@ static int cake_change(struct Qdisc *sch, struct nlattr *opt)
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 12, 0)
 	err = nla_parse_nested(tb, TCA_CAKE_MAX, opt, cake_policy);
-#else
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(4, 16, 0)
 	err = nla_parse_nested(tb, TCA_CAKE_MAX, opt, cake_policy, NULL);
+#else
+	err = nla_parse_nested(tb, TCA_CAKE_MAX, opt, cake_policy, extack);
 #endif
 	if (err < 0)
 		return err;
@@ -2500,7 +2507,12 @@ static void cake_destroy(struct Qdisc *sch)
 		cake_free(q->tins);
 }
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 16, 0)
 static int cake_init(struct Qdisc *sch, struct nlattr *opt)
+#else
+static int cake_init(struct Qdisc *sch, struct nlattr *opt,
+		struct netlink_ext_ack *extack)
+#endif
 {
 	struct cake_sched_data *q = qdisc_priv(sch);
 	int i, j;
@@ -2520,7 +2532,11 @@ static int cake_init(struct Qdisc *sch, struct nlattr *opt)
 	q->cur_flow  = 0;
 
 	if (opt) {
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 16, 0)
 		int err = cake_change(sch, opt);
+#else
+		int err = cake_change(sch, opt, extack);
+#endif
 
 		if (err)
 			return err;
