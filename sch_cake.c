@@ -2664,7 +2664,7 @@ static int cake_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 	if (!st)
 		return -1;
 
-	st->version = 0x101; /* old userspace code discards versions > 0xFF */
+	st->version = 0x102; /* old userspace code discards versions > 0xFF */
 	st->tin_stats_size = sizeof(struct tc_cake_tin_stats);
 	st->tin_cnt = q->tin_cnt;
 
@@ -2704,6 +2704,8 @@ static int cake_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 		tstat->unresponse_flows  = b->unresponsive_flow_count;
 		tstat->spare		 = 0;
 		tstat->max_skblen	 = b->max_skblen;
+
+		tstat->flow_quantum	 = b->flow_quantum;
 	}
 	st->capacity_estimate = q->avg_peak_bandwidth;
 	st->memory_limit      = q->buffer_limit;

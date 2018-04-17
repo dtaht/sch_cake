@@ -908,6 +908,7 @@ struct tc_cake_tin_stats {
 	__u16 spare;
 	__u32 max_skblen;
 	struct tc_cake_traffic_stats ack_drops;
+	__u16 flow_quantum;
 };
 
 struct tc_cake_xstats {
