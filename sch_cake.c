@@ -1,4 +1,4 @@
-/* COMMON Applications Kept Enhanced (CAKE) discipline - version 5
+/* COMMON Applications Kept Enhanced (CAKE) discipline - stats version 5
  *
  * Copyright (C) 2014-2017 Jonathan Morton <chromatix99@gmail.com>
  * Copyright (C) 2015-2017 Toke Høiland-Jørgensen <toke@toke.dk>
@@ -119,11 +119,15 @@
 #define CAKE_MAX_TINS (8)
 #define CAKE_QUEUES (1024)
 
-#ifndef CAKE_VERSION
-#define CAKE_VERSION "unknown"
+#define CAKE_ABI_VERSION "1.0"
+static char *cake_abi_version __attribute__((used)) = "version="
+		CAKE_ABI_VERSION;
+
+#ifndef CAKE_GIT_REVISION
+#define CAKE_GIT_REVISION "unknown"
 #endif
-static char *cake_version __attribute__((used)) = "Cake version: "
-		CAKE_VERSION;
+static char *cake_git_revision __attribute__((used)) = "gitrevision="
+		CAKE_GIT_REVISION;
 
 enum {
 	CAKE_SET_NONE = 0,
@@ -2748,4 +2752,6 @@ module_init(cake_module_init)
 module_exit(cake_module_exit)
 MODULE_AUTHOR("Jonathan Morton");
 MODULE_LICENSE("Dual BSD/GPL");
-MODULE_DESCRIPTION("The Cake shaper. Version: " CAKE_VERSION);
+MODULE_DESCRIPTION("The CAKE queue discipline: deficit-mode shaping, AQM and FQ.");
+MODULE_VERSION(CAKE_ABI_VERSION);
+MODULE_INFO(gitrevision, CAKE_GIT_REVISION);
