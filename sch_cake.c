@@ -500,7 +500,7 @@ static bool cobalt_should_drop(struct cobalt_vars *vars,
  * both the '0' and '1' entries in the invsqrt cache are 0xFFFFFFFF, as close
  * as possible to 1.0 in fixed-point.
  */
-	cobald_tdiff_t min_time = p->mtu_time;
+	cobalt_tdiff_t min_time = p->mtu_time;
 
 	if (test_flags & TEST_FLAG_2MTU)
 		min_time *= 2;
