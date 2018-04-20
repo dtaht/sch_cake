@@ -262,6 +262,9 @@ struct cake_sched_data {
 	u16 max_adjlen;
 	u16 min_trnlen;
 	u16 min_adjlen;
+
+	/* testing flags */
+	u32 test_flags;
 };
 
 enum {
@@ -1944,6 +1947,7 @@ static const struct nla_policy cake_policy[TCA_CAKE_MAX + 1] = {
 	[TCA_CAKE_MPU]		 = { .type = NLA_U32 },
 	[TCA_CAKE_INGRESS]	 = { .type = NLA_U32 },
 	[TCA_CAKE_ACK_FILTER]	 = { .type = NLA_U32 },
+	[TCA_CAKE_TEST_FLAGS]	 = { .type = NLA_U32 },
 };
 
 static void cake_set_rate(struct cake_tin_data *b, u64 rate, u32 mtu,
@@ -2380,6 +2384,9 @@ static int cake_change(struct Qdisc *sch, struct nlattr *opt,
 	if (tb[TCA_CAKE_MEMORY])
 		q->buffer_config_limit = nla_get_u32(tb[TCA_CAKE_MEMORY]);
 
+	if (tb[TCA_CAKE_TEST_FLAGS])
+		q->test_flags = nla_get_u32(tb[TCA_CAKE_TEST_FLAGS]);
+
 	if (q->tins) {
 		sch_tree_lock(sch);
 		cake_reconfigure(sch);
@@ -2549,6 +2556,9 @@ static int cake_dump(struct Qdisc *sch, struct sk_buff *skb)
 		goto nla_put_failure;
 
 	if (nla_put_u32(skb, TCA_CAKE_MEMORY, q->buffer_config_limit))
+		goto nla_put_failure;
+
+	if (nla_put_u32(skb, TCA_CAKE_TEST_FLAGS, q->test_flags))
 		goto nla_put_failure;
 
 	return nla_nest_end(skb, opts);
