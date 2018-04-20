@@ -2473,7 +2473,7 @@ static int cake_change(struct Qdisc *sch, struct nlattr *opt,
 	}
 
 	if (tb[TCA_CAKE_MEMORY])
-		q->buffer_config_limit = nla_get_s32(tb[TCA_CAKE_MEMORY]);
+		q->buffer_config_limit = nla_get_u32(tb[TCA_CAKE_MEMORY]);
 
 	if (q->tins) {
 		sch_tree_lock(sch);
