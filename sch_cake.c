@@ -274,6 +274,12 @@ enum {
 	CAKE_FLAG_WASH		   = BIT(3)
 };
 
+enum {
+	TEST_FLAG_2MTU = BIT(0),
+	TEST_FLAG_4MTU = BIT(1),
+	TEST_FLAG_SCALE_MTU = BIT(2)
+};
+
 static u16 quantum_div[CAKE_QUEUES + 1] = {0};
 
 /* Diffserv lookup tables */
@@ -472,7 +478,8 @@ static bool cobalt_should_drop(struct cobalt_vars *vars,
 			       struct cobalt_params *p,
 			       cobalt_time_t now,
 			       struct sk_buff *skb,
-			       u32 bulk_flows)
+			       u32 bulk_flows,
+ 			       u32 test_flags)
 {
 	bool drop = false;
 
@@ -493,10 +500,19 @@ static bool cobalt_should_drop(struct cobalt_vars *vars,
  * both the '0' and '1' entries in the invsqrt cache are 0xFFFFFFFF, as close
  * as possible to 1.0 in fixed-point.
  */
+	cobald_tdiff_t min_time = p->mtu_time;
+
+	if (test_flags & TEST_FLAG_2MTU)
+		min_time *= 2;
+	else if (test_flags & TEST_FLAG_4MTU)
+		min_time *= 4;
+
+	if (test_flags & TEST_FLAG_SCALE_MTU)
+		min_time *= bulk_flows;
 
 	cobalt_tdiff_t schedule = now - vars->drop_next;
 	bool over_target = sojourn > p->target &&
-	                   sojourn > p->mtu_time * bulk_flows * 4;
+	                   sojourn > min_time;
 	bool next_due    = vars->count && schedule >= 0;
 
 	vars->ecn_marked = false;
@@ -1856,7 +1872,8 @@ retry:
 
 		/* Last packet in queue may be marked, shouldn't be dropped */
 		if (!cobalt_should_drop(&flow->cvars, &b->cparams, now, skb,
-			b->bulk_flow_count) || !flow->head)
+						b->bulk_flow_count,
+						q->test_flags) || !flow->head)
 			break;
 
 		/* drop this packet, get another one */
