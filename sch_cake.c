@@ -258,9 +258,9 @@ struct cake_sched_data {
 
 	/* packet length stats */
 	u32 avg_trnoff;
-	u16 max_trnlen;
+	u16 max_netlen;
 	u16 max_adjlen;
-	u16 min_trnlen;
+	u16 min_netlen;
 	u16 min_adjlen;
 };
 
@@ -1160,10 +1160,10 @@ static inline u32 cake_overhead(struct cake_sched_data *q, struct sk_buff *skb)
 	if (q->rate_flags & CAKE_FLAG_OVERHEAD)
 		len -= off;
 
-	if (q->max_trnlen < len)
-		q->max_trnlen = len;
-	if (q->min_trnlen > len)
-		q->min_trnlen = len;
+	if (q->max_netlen < len)
+		q->max_netlen = len;
+	if (q->min_netlen > len)
+		q->min_netlen = len;
 
 	len += q->rate_overhead;
 
@@ -2331,15 +2331,15 @@ static int cake_change(struct Qdisc *sch, struct nlattr *opt,
 		q->rate_overhead = nla_get_s32(tb[TCA_CAKE_OVERHEAD]);
 		q->rate_flags |= CAKE_FLAG_OVERHEAD;
 
-		q->max_trnlen = q->max_adjlen = 0;
-		q->min_trnlen = q->min_adjlen = ~0;
+		q->max_netlen = q->max_adjlen = 0;
+		q->min_netlen = q->min_adjlen = ~0;
 	}
 
 	if (tb[TCA_CAKE_RAW]) {
 		q->rate_flags &= ~CAKE_FLAG_OVERHEAD;
 
-		q->max_trnlen = q->max_adjlen = 0;
-		q->min_trnlen = q->min_adjlen = ~0;
+		q->max_netlen = q->max_adjlen = 0;
+		q->min_netlen = q->min_adjlen = ~0;
 	}
 
 	if (tb[TCA_CAKE_MPU])
@@ -2485,7 +2485,7 @@ static int cake_init(struct Qdisc *sch, struct nlattr *opt,
 
 	cake_reconfigure(sch);
 	q->avg_peak_bandwidth = q->rate_bps;
-	q->min_trnlen = q->min_adjlen = ~0;
+	q->min_netlen = q->min_adjlen = ~0;
 	return 0;
 
 nomem:
@@ -2574,9 +2574,9 @@ static int cake_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 	st->tin_cnt = q->tin_cnt;
 
 	st->avg_trnoff = (q->avg_trnoff + 0x8000) >> 16;
-	st->max_trnlen = q->max_trnlen;
+	st->max_netlen = q->max_netlen;
 	st->max_adjlen = q->max_adjlen;
-	st->min_trnlen = q->min_trnlen;
+	st->min_netlen = q->min_netlen;
 	st->min_adjlen = q->min_adjlen;
 
 	for (i = 0; i < q->tin_cnt; i++) {
