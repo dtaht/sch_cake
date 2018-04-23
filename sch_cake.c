@@ -258,9 +258,9 @@ struct cake_sched_data {
 
 	/* packet length stats */
 	u32 avg_trnoff;
-	u16 max_netlen;
+	u16 max_trnlen;
 	u16 max_adjlen;
-	u16 min_netlen;
+	u16 min_trnlen;
 	u16 min_adjlen;
 };
 
@@ -469,8 +469,7 @@ static bool cobalt_should_drop(struct cobalt_vars *vars,
 			       struct cobalt_params *p,
 			       cobalt_time_t now,
 			       struct sk_buff *skb,
-			       u32 bulk_flows,
-			       bool ingress)
+			       u32 bulk_flows)
 {
 	bool drop = false;
 
@@ -493,15 +492,10 @@ static bool cobalt_should_drop(struct cobalt_vars *vars,
  */
 
 	cobalt_tdiff_t schedule = now - vars->drop_next;
-	cobalt_time_t mtu_time_target = p->mtu_time;
+	bool over_target = sojourn > p->target && (
+	                   sojourn > p->mtu_time * bulk_flows * 2 ||
+	                   sojourn > p->mtu_time * 4 );
 	bool next_due    = vars->count && schedule >= 0;
-	bool over_target;
-
-	if (ingress)
-		mtu_time_target *= (cobalt_time_t)bulk_flows * 2;
-
-	over_target = sojourn > p->target &&
-		      sojourn > mtu_time_target;
 
 	vars->ecn_marked = false;
 
@@ -1167,10 +1161,10 @@ static inline u32 cake_overhead(struct cake_sched_data *q, struct sk_buff *skb)
 	if (q->rate_flags & CAKE_FLAG_OVERHEAD)
 		len -= off;
 
-	if (q->max_netlen < len)
-		q->max_netlen = len;
-	if (q->min_netlen > len)
-		q->min_netlen = len;
+	if (q->max_trnlen < len)
+		q->max_trnlen = len;
+	if (q->min_trnlen > len)
+		q->min_trnlen = len;
 
 	len += q->rate_overhead;
 
@@ -1860,8 +1854,7 @@ retry:
 
 		/* Last packet in queue may be marked, shouldn't be dropped */
 		if (!cobalt_should_drop(&flow->cvars, &b->cparams, now, skb,
-			b->bulk_flow_count, q->rate_flags & CAKE_FLAG_INGRESS) ||
-			!flow->head)
+			b->bulk_flow_count * !!(q->rate_flags & CAKE_FLAG_INGRESS)) || !flow->head)
 			break;
 
 		/* drop this packet, get another one */
@@ -2339,15 +2332,15 @@ static int cake_change(struct Qdisc *sch, struct nlattr *opt,
 		q->rate_overhead = nla_get_s32(tb[TCA_CAKE_OVERHEAD]);
 		q->rate_flags |= CAKE_FLAG_OVERHEAD;
 
-		q->max_netlen = q->max_adjlen = 0;
-		q->min_netlen = q->min_adjlen = ~0;
+		q->max_trnlen = q->max_adjlen = 0;
+		q->min_trnlen = q->min_adjlen = ~0;
 	}
 
 	if (tb[TCA_CAKE_RAW]) {
 		q->rate_flags &= ~CAKE_FLAG_OVERHEAD;
 
-		q->max_netlen = q->max_adjlen = 0;
-		q->min_netlen = q->min_adjlen = ~0;
+		q->max_trnlen = q->max_adjlen = 0;
+		q->min_trnlen = q->min_adjlen = ~0;
 	}
 
 	if (tb[TCA_CAKE_MPU])
@@ -2493,7 +2486,7 @@ static int cake_init(struct Qdisc *sch, struct nlattr *opt,
 
 	cake_reconfigure(sch);
 	q->avg_peak_bandwidth = q->rate_bps;
-	q->min_netlen = q->min_adjlen = ~0;
+	q->min_trnlen = q->min_adjlen = ~0;
 	return 0;
 
 nomem:
@@ -2582,9 +2575,9 @@ static int cake_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 	st->tin_cnt = q->tin_cnt;
 
 	st->avg_trnoff = (q->avg_trnoff + 0x8000) >> 16;
-	st->max_netlen = q->max_netlen;
+	st->max_trnlen = q->max_trnlen;
 	st->max_adjlen = q->max_adjlen;
-	st->min_netlen = q->min_netlen;
+	st->min_trnlen = q->min_trnlen;
 	st->min_adjlen = q->min_adjlen;
 
 	for (i = 0; i < q->tin_cnt; i++) {
