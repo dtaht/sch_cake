@@ -1,10 +1,12 @@
-/* COMMON Applications Kept Enhanced (CAKE) discipline - version 5
+// SPDX-License-Identifier: GPL-2.0 OR BSD-3-Clause
+/*
+ * COMMON Applications Kept Enhanced (CAKE) discipline - version 5
  *
- * Copyright (C) 2014-2017 Jonathan Morton <chromatix99@gmail.com>
- * Copyright (C) 2015-2017 Toke Høiland-Jørgensen <toke@toke.dk>
- * Copyright (C) 2014-2017 Dave Täht <dave.taht@gmail.com>
- * Copyright (C) 2015-2017 Sebastian Moeller <moeller0@gmx.de>
- * (C) 2015-2017 Kevin Darbyshire-Bryant <kevin@darbyshire-bryant.me.uk>
+ * Copyright (C) 2014-2018 Jonathan Morton <chromatix99@gmail.com>
+ * Copyright (C) 2015-2018 Toke Høiland-Jørgensen <toke@toke.dk>
+ * Copyright (C) 2014-2018 Dave Täht <dave.taht@gmail.com>
+ * Copyright (C) 2015-2018 Sebastian Moeller <moeller0@gmx.de>
+ * (C) 2015-2018 Kevin Darbyshire-Bryant <kevin@darbyshire-bryant.me.uk>
  * Copyright (C) 2017 Ryan Mounce <ryan@mounce.com.au>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -557,8 +559,8 @@ static bool cobalt_should_drop(struct cobalt_vars *vars,
 
 	cobalt_tdiff_t schedule = now - vars->drop_next;
 	bool over_target = sojourn > p->target && (
-	                   sojourn > p->mtu_time * bulk_flows * 2 ||
-	                   sojourn > p->mtu_time * 4 );
+			   sojourn > p->mtu_time * bulk_flows * 2 ||
+			   sojourn > p->mtu_time * 4);
 	bool next_due    = vars->count && schedule >= 0;
 
 	vars->ecn_marked = false;
@@ -916,7 +918,8 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 		if (ipv6h->nexthdr != IPPROTO_TCP)
 			return NULL;
 		seglen = ntohs(ipv6h->payload_len);
-		tcph = (struct tcphdr *)((void *)ipv6h + sizeof(struct ipv6hdr));
+		tcph = (struct tcphdr *)((void *)ipv6h +
+					 sizeof(struct ipv6hdr));
 	} else {
 		return NULL;
 	}
@@ -958,7 +961,8 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 		if (iph_check->version == 4) {
 			if (iph_check->protocol != IPPROTO_TCP)
 				continue;
-			seglen = ntohs(iph_check->tot_len) - (4 * iph_check->ihl);
+			seglen = (ntohs(iph_check->tot_len) -
+				  (4 * iph_check->ihl));
 			tcph_check = (struct tcphdr *)((void *)iph_check
 				+ (4 * iph_check->ihl));
 			if (iph->version == 4 &&
@@ -976,7 +980,8 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 				     sizeof(struct ipv6hdr));
 			if (ipv6h->version == 6 &&
 			    ipv6_addr_cmp(&ipv6h_check->saddr, &ipv6h->saddr) &&
-				ipv6_addr_cmp(&ipv6h_check->daddr, &ipv6h->daddr)) {
+				ipv6_addr_cmp(&ipv6h_check->daddr,
+					      &ipv6h->daddr)) {
 				thisconn = true;
 			} else {
 				thisconn = false;
@@ -1439,7 +1444,8 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 			if (q->time_next_packet < now) {
 				q->failsafe_next_packet = now;
 				q->time_next_packet = now;
-			} else if (q->time_next_packet > now && q->failsafe_next_packet > now) {
+			} else if (q->time_next_packet > now
+				   && q->failsafe_next_packet > now) {
 				u64 next = min(q->time_next_packet,
 					       q->failsafe_next_packet);
 				sch->qstats.overlimits++;
@@ -1472,7 +1478,8 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 			segs->next = NULL;
 			qdisc_skb_cb(segs)->pkt_len = segs->len;
 			cobalt_set_enqueue_time(segs, now);
-			get_cobalt_cb(segs)->adjusted_len = cake_overhead(q, segs);
+			get_cobalt_cb(segs)->adjusted_len = cake_overhead(q,
+									  segs);
 			flow_queue_add(flow, segs);
 
 			if (q->ack_filter)
@@ -1603,7 +1610,8 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 		if (cake_ddst(q->flow_mode))
 			host_load = max(host_load, dsthost->dsthost_refcnt);
 
-		flow->deficit = (b->flow_quantum * quantum_div[host_load]) >> 16;
+		flow->deficit = (b->flow_quantum *
+				 quantum_div[host_load]) >> 16;
 	} else if (flow->set == CAKE_SET_SPARSE_WAIT) {
 		/* this flow was empty, accounted as a sparse flow, but actually
 		 * in the bulk rotation.
@@ -1686,6 +1694,7 @@ begin:
 	/* global hard shaper */
 	if (q->time_next_packet > now && q->failsafe_next_packet > now) {
 		u64 next = min(q->time_next_packet, q->failsafe_next_packet);
+
 		sch->qstats.overlimits++;
 		qdisc_watchdog_schedule_ns(&q->watchdog, next);
 		return NULL;
@@ -1766,7 +1775,8 @@ retry:
 	/* flow isolation (DRR++) */
 	if (flow->deficit <= 0) {
 		/* The shifted prandom_u32() is a way to apply dithering to
-		 * avoid accumulating roundoff errors */
+		 * avoid accumulating roundoff errors
+		 */
 		flow->deficit += (b->flow_quantum * quantum_div[host_load] +
 				  (prandom_u32() >> 16)) >> 16;
 		list_move_tail(&flow->flowchain, &b->old_flows);
@@ -1835,7 +1845,9 @@ retry:
 
 		/* Last packet in queue may be marked, shouldn't be dropped */
 		if (!cobalt_should_drop(&flow->cvars, &b->cparams, now, skb,
-			b->bulk_flow_count * !!(q->rate_flags & CAKE_FLAG_INGRESS)) || !flow->head)
+					(b->bulk_flow_count *
+					 !!(q->rate_flags & CAKE_FLAG_INGRESS)))
+		    || !flow->head)
 			break;
 
 		/* drop this packet, get another one */
@@ -1870,6 +1882,7 @@ retry:
 
 	if (q->time_next_packet > now && sch->q.qlen) {
 		u64 next = min(q->time_next_packet, q->failsafe_next_packet);
+
 		qdisc_watchdog_schedule_ns(&q->watchdog, next);
 	} else if (!sch->q.qlen) {
 		int i;
@@ -1877,6 +1890,7 @@ retry:
 		for (i = 0; i < q->tin_cnt; i++) {
 			if (q->tins[i].decaying_flow_count) {
 				u64 next = now + q->tins[i].cparams.target;
+
 				qdisc_watchdog_schedule_ns(&q->watchdog, next);
 				break;
 			}
@@ -2244,7 +2258,9 @@ static void cake_reconfigure(struct Qdisc *sch)
 
 	sch->flags &= ~TCQ_F_CAN_BYPASS;
 
-	q->buffer_limit = min(q->buffer_limit, max(sch->limit * psched_mtu(qdisc_dev(sch)), q->buffer_config_limit));
+	q->buffer_limit = min(q->buffer_limit,
+			      max(sch->limit * psched_mtu(qdisc_dev(sch)),
+				  q->buffer_config_limit));
 }
 
 static int cake_change(struct Qdisc *sch, struct nlattr *opt,
@@ -2332,9 +2348,8 @@ static int cake_change(struct Qdisc *sch, struct nlattr *opt,
 			q->rate_flags &= ~CAKE_FLAG_INGRESS;
 	}
 
-	if (tb[TCA_CAKE_ACK_FILTER]) {
+	if (tb[TCA_CAKE_ACK_FILTER])
 		q->ack_filter = nla_get_u32(tb[TCA_CAKE_ACK_FILTER]);
-	}
 
 	if (tb[TCA_CAKE_MEMORY])
 		q->buffer_config_limit = nla_get_u32(tb[TCA_CAKE_MEMORY]);
@@ -2462,10 +2477,12 @@ static int cake_dump(struct Qdisc *sch, struct sk_buff *skb)
 	if (nla_put_u32(skb, TCA_CAKE_ATM, q->atm_mode))
 		goto nla_put_failure;
 
-	if (nla_put_u32(skb, TCA_CAKE_FLOW_MODE, q->flow_mode & ~CAKE_FLOW_NAT_FLAG))
+	if (nla_put_u32(skb, TCA_CAKE_FLOW_MODE,
+			q->flow_mode & ~CAKE_FLOW_NAT_FLAG))
 		goto nla_put_failure;
 
-	if (nla_put_u32(skb, TCA_CAKE_NAT, !!(q->flow_mode & CAKE_FLOW_NAT_FLAG)))
+	if (nla_put_u32(skb, TCA_CAKE_NAT,
+			!!(q->flow_mode & CAKE_FLOW_NAT_FLAG)))
 		goto nla_put_failure;
 
 	if (nla_put_u32(skb, TCA_CAKE_WASH,
@@ -2512,7 +2529,8 @@ static int cake_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 {
 	struct cake_sched_data *q = qdisc_priv(sch);
 	struct tc_cake_xstats *st;
-	size_t size = sizeof(*st) + sizeof(struct tc_cake_tin_stats) * q->tin_cnt;
+	size_t size = (sizeof(*st) +
+		       sizeof(struct tc_cake_tin_stats) * q->tin_cnt);
 	int i;
 
 	st = cake_zalloc(size);
