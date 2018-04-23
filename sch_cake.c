@@ -469,7 +469,8 @@ static bool cobalt_should_drop(struct cobalt_vars *vars,
 			       struct cobalt_params *p,
 			       cobalt_time_t now,
 			       struct sk_buff *skb,
-			       u32 bulk_flows)
+			       u32 bulk_flows,
+			       bool ingress)
 {
 	bool drop = false;
 
@@ -492,9 +493,15 @@ static bool cobalt_should_drop(struct cobalt_vars *vars,
  */
 
 	cobalt_tdiff_t schedule = now - vars->drop_next;
-	bool over_target = sojourn > p->target &&
-	                   sojourn > p->mtu_time * bulk_flows * 4;
+	cobalt_time_t mtu_time_target = p->mtu_time;
 	bool next_due    = vars->count && schedule >= 0;
+	bool over_target;
+
+	if (ingress)
+		mtu_time_target *= (cobalt_time_t)bulk_flows * 2;
+
+	over_target = sojourn > p->target &&
+		      sojourn > mtu_time_target;
 
 	vars->ecn_marked = false;
 
@@ -1853,7 +1860,8 @@ retry:
 
 		/* Last packet in queue may be marked, shouldn't be dropped */
 		if (!cobalt_should_drop(&flow->cvars, &b->cparams, now, skb,
-			b->bulk_flow_count) || !flow->head)
+			b->bulk_flow_count, q->rate_flags & CAKE_FLAG_INGRESS) ||
+			!flow->head)
 			break;
 
 		/* drop this packet, get another one */

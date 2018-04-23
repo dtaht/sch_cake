@@ -158,6 +158,7 @@ static bool cobalt_should_drop(struct cobalt_vars *vars,
 			       struct cobalt_params *p,
 			       cobalt_time_t now,
 			       struct sk_buff *skb,
-			       u32 bulk_flows);
+			       u32 bulk_flows,
+			       bool ingress);
 
 #endif
