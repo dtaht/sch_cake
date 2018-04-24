@@ -2527,66 +2527,85 @@ nla_put_failure:
 static int cake_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 {
 	struct cake_sched_data *q = qdisc_priv(sch);
-	struct tc_cake_xstats *st;
-	size_t size = (sizeof(*st) +
-		       sizeof(struct tc_cake_tin_stats) * q->tin_cnt);
+	struct nlattr *stats = nla_nest_start(d->skb, TCA_STATS_APP);
+	struct nlattr *tstats, *ts;
 	int i;
 
-	st = cake_zalloc(size);
-
-	if (!st)
+	if (!stats)
 		return -1;
 
-	st->version = 0x102; /* old userspace code discards versions > 0xFF */
-	st->tin_stats_size = sizeof(struct tc_cake_tin_stats);
-	st->tin_cnt = q->tin_cnt;
+#define PUT_STAT_U32(attr, data) do {					\
+		if(nla_put_u32(d->skb, TCA_CAKE_STATS_ ## attr, data)) \
+			return -1;					\
+	} while (0);
 
-	st->avg_trnoff = (q->avg_trnoff + 0x8000) >> 16;
-	st->max_netlen = q->max_netlen;
-	st->max_adjlen = q->max_adjlen;
-	st->min_netlen = q->min_netlen;
-	st->min_adjlen = q->min_adjlen;
+	PUT_STAT_U32(CAPACITY_ESTIMATE, q->avg_peak_bandwidth);
+	PUT_STAT_U32(MEMORY_LIMIT, q->buffer_limit);
+	PUT_STAT_U32(MEMORY_USED, q->buffer_max_used);
+	PUT_STAT_U32(AVG_TRNOFF, ((q->avg_trnoff + 0x8000) >> 16));
+	PUT_STAT_U32(MAX_NETLEN, q->max_netlen);
+	PUT_STAT_U32(MAX_ADJLEN, q->max_adjlen);
+	PUT_STAT_U32(MIN_NETLEN, q->min_netlen);
+	PUT_STAT_U32(MIN_ADJLEN, q->min_adjlen);
+
+#undef PUT_STAT_U32
+
+	tstats = nla_nest_start(d->skb, TCA_CAKE_STATS_TIN_STATS);
+	if (!tstats)
+		return -1;
+
+#define PUT_TSTAT_U32(attr, data) do {					\
+		if(nla_put_u32(d->skb, TCA_CAKE_TIN_STATS_ ## attr, data)) \
+			return -1;					\
+	} while (0);
+#define PUT_TSTAT_U64(attr, data) do {					\
+		if(nla_put_u64_64bit(d->skb, TCA_CAKE_TIN_STATS_ ## attr, \
+					data, TCA_CAKE_TIN_STATS_PAD))	\
+			return -1;					\
+	} while (0);
 
 	for (i = 0; i < q->tin_cnt; i++) {
 		struct cake_tin_data *b = &q->tins[q->tin_order[i]];
-		struct tc_cake_tin_stats *tstat = &st->tin_stats[i];
 
-		tstat->threshold_rate = b->tin_rate_bps;
-		tstat->target_us      = cobalt_time_to_us(b->cparams.target);
-		tstat->interval_us    = cobalt_time_to_us(b->cparams.interval);
+		ts = nla_nest_start(d->skb, i + 1);
+		if (!ts)
+			return -1;
 
-		/* TODO FIXME: add missing aspects of these composite stats */
-		tstat->sent.packets       = b->packets;
-		tstat->sent.bytes	  = b->bytes;
-		tstat->dropped.packets    = b->tin_dropped;
-		tstat->ecn_marked.packets = b->tin_ecn_mark;
-		tstat->backlog.bytes      = b->tin_backlog;
-		tstat->ack_drops.packets  = b->ack_drops;
+		PUT_TSTAT_U32(THRESHOLD_RATE, b->tin_rate_bps);
+		PUT_TSTAT_U32(TARGET_US, cobalt_time_to_us(b->cparams.target));
+		PUT_TSTAT_U32(INTERVAL_US, cobalt_time_to_us(b->cparams.interval));
 
-		tstat->peak_delay_us = cobalt_time_to_us(b->peak_delay);
-		tstat->avge_delay_us = cobalt_time_to_us(b->avge_delay);
-		tstat->base_delay_us = cobalt_time_to_us(b->base_delay);
+		PUT_TSTAT_U32(SENT_PACKETS, b->packets);
+		PUT_TSTAT_U64(SENT_BYTES64, b->bytes);
+		PUT_TSTAT_U32(DROPPED_PACKETS, b->tin_dropped);
+		PUT_TSTAT_U32(ECN_MARKED_PACKETS, b->tin_ecn_mark);
+		PUT_TSTAT_U64(BACKLOG_BYTES64, b->tin_backlog);
+		PUT_TSTAT_U32(ACKS_DROPPED_PACKETS, b->ack_drops);
 
-		tstat->way_indirect_hits = b->way_hits;
-		tstat->way_misses	 = b->way_misses;
-		tstat->way_collisions    = b->way_collisions;
+		PUT_TSTAT_U32(PEAK_DELAY_US, cobalt_time_to_us(b->peak_delay));
+		PUT_TSTAT_U32(AVG_DELAY_US, cobalt_time_to_us(b->avge_delay));
+		PUT_TSTAT_U32(BASE_DELAY_US, cobalt_time_to_us(b->base_delay));
 
-		tstat->sparse_flows      = b->sparse_flow_count +
-					   b->decaying_flow_count;
-		tstat->bulk_flows	 = b->bulk_flow_count;
-		tstat->unresponse_flows  = b->unresponsive_flow_count;
-		tstat->spare		 = 0;
-		tstat->max_skblen	 = b->max_skblen;
+		PUT_TSTAT_U32(WAY_INDIRECT_HITS, b->way_hits);
+		PUT_TSTAT_U32(WAY_MISSES, b->way_misses);
+		PUT_TSTAT_U32(WAY_COLLISIONS, b->way_collisions);
 
-		tstat->flow_quantum	 = b->flow_quantum;
+		PUT_TSTAT_U32(SPARSE_FLOWS, b->sparse_flow_count +
+					   b->decaying_flow_count);
+		PUT_TSTAT_U32(BULK_FLOWS, b->bulk_flow_count);
+		PUT_TSTAT_U32(UNRESPONSIVE_FLOWS, b->unresponsive_flow_count);
+		PUT_TSTAT_U32(MAX_SKBLEN, b->max_skblen);
+
+		PUT_TSTAT_U32(FLOW_QUANTUM, b->flow_quantum);
+		nla_nest_end(d->skb, ts);
 	}
-	st->capacity_estimate = q->avg_peak_bandwidth;
-	st->memory_limit      = q->buffer_limit;
-	st->memory_used       = q->buffer_max_used;
 
-	i = gnet_stats_copy_app(d, st, size);
-	cake_free(st);
-	return i;
+#undef PUT_TSTAT_U32
+#undef PUT_TSTAT_U64
+
+	nla_nest_end(d->skb, tstats);
+
+	return nla_nest_end(d->skb, stats);
 }
 
 static struct Qdisc_ops cake_qdisc_ops __read_mostly = {
