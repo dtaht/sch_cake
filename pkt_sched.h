@@ -881,6 +881,53 @@ enum {
 #define TCA_CAKE_MAX	(__TCA_CAKE_MAX - 1)
 
 enum {
+	__TCA_CAKE_STATS_INVALID,
+	TCA_CAKE_STATS_CAPACITY_ESTIMATE,
+	TCA_CAKE_STATS_MEMORY_LIMIT,
+	TCA_CAKE_STATS_MEMORY_USED,
+	TCA_CAKE_STATS_AVG_TRNOFF,
+	TCA_CAKE_STATS_MIN_NETLEN,
+	TCA_CAKE_STATS_MAX_NETLEN,
+	TCA_CAKE_STATS_MIN_ADJLEN,
+	TCA_CAKE_STATS_MAX_ADJLEN,
+	TCA_CAKE_STATS_TIN_STATS,
+	__TCA_CAKE_STATS_MAX
+};
+#define TCA_CAKE_STATS_MAX (__TCA_CAKE_STATS_MAX - 1)
+
+enum {
+	__TCA_CAKE_TIN_STATS_INVALID,
+	TCA_CAKE_TIN_STATS_PAD,
+	TCA_CAKE_TIN_STATS_SENT_PACKETS,
+	TCA_CAKE_TIN_STATS_SENT_BYTES64,
+	TCA_CAKE_TIN_STATS_DROPPED_PACKETS,
+	TCA_CAKE_TIN_STATS_DROPPED_BYTES64,
+	TCA_CAKE_TIN_STATS_ACKS_DROPPED_PACKETS,
+	TCA_CAKE_TIN_STATS_ACKS_DROPPED_BYTES64,
+	TCA_CAKE_TIN_STATS_ECN_MARKED_PACKETS,
+	TCA_CAKE_TIN_STATS_ECN_MARKED_BYTES64,
+	TCA_CAKE_TIN_STATS_BACKLOG_PACKETS,
+	TCA_CAKE_TIN_STATS_BACKLOG_BYTES64,
+	TCA_CAKE_TIN_STATS_THRESHOLD_RATE,
+	TCA_CAKE_TIN_STATS_TARGET_US,
+	TCA_CAKE_TIN_STATS_INTERVAL_US,
+	TCA_CAKE_TIN_STATS_WAY_INDIRECT_HITS,
+	TCA_CAKE_TIN_STATS_WAY_MISSES,
+	TCA_CAKE_TIN_STATS_WAY_COLLISIONS,
+	TCA_CAKE_TIN_STATS_PEAK_DELAY_US,
+	TCA_CAKE_TIN_STATS_AVG_DELAY_US,
+	TCA_CAKE_TIN_STATS_BASE_DELAY_US,
+	TCA_CAKE_TIN_STATS_SPARSE_FLOWS,
+	TCA_CAKE_TIN_STATS_BULK_FLOWS,
+	TCA_CAKE_TIN_STATS_UNRESPONSIVE_FLOWS,
+	TCA_CAKE_TIN_STATS_MAX_SKBLEN,
+	TCA_CAKE_TIN_STATS_FLOW_QUANTUM,
+	__TCA_CAKE_TIN_STATS_MAX
+};
+#define TCA_CAKE_TIN_STATS_MAX (__TCA_CAKE_TIN_STATS_MAX - 1)
+#define TC_CAKE_MAX_TINS (8)
+
+enum {
 	CAKE_FLOW_NONE = 0,
 	CAKE_FLOW_SRC_IP,
 	CAKE_FLOW_DST_IP,
@@ -915,53 +962,4 @@ enum {
 	CAKE_ATM_MAX
 };
 
-struct tc_cake_traffic_stats {
-	__u32 packets;
-	__u32 link_ms;
-	__u64 bytes;
-};
-
-#define TC_CAKE_MAX_TINS (8)
-struct tc_cake_tin_stats {
-
-	__u32 threshold_rate;
-	__u32 target_us;
-	struct tc_cake_traffic_stats sent;
-	struct tc_cake_traffic_stats dropped;
-	struct tc_cake_traffic_stats ecn_marked;
-	struct tc_cake_traffic_stats backlog;
-	__u32 interval_us;
-	__u32 way_indirect_hits;
-	__u32 way_misses;
-	__u32 way_collisions;
-	__u32 peak_delay_us; /* ~= bulk flow delay */
-	__u32 avge_delay_us;
-	__u32 base_delay_us; /* ~= sparse flows delay */
-	__u16 sparse_flows;
-	__u16 bulk_flows;
-	__u16 unresponse_flows;
-	__u16 spare;
-	__u32 max_skblen;
-	struct tc_cake_traffic_stats ack_drops;
-	__u16 flow_quantum;
-};
-
-struct tc_cake_xstats {
-	__u16 version;
-	__u16 tin_stats_size; /* == sizeof(struct tc_cake_tin_stats) */
-	__u32 capacity_estimate;
-	__u32 memory_limit;
-	__u32 memory_used;
-	__u8  tin_cnt;
-	__u8  avg_trnoff;
-	__u16 max_netlen;
-	__u16 max_adjlen;
-	__u16 min_netlen;
-	__u16 min_adjlen;
-
-	__u16 spare1;
-	__u32 spare2;
-
-	struct tc_cake_tin_stats tin_stats[0]; /* keep last */
-};
 #endif
