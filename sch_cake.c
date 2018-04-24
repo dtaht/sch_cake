@@ -66,7 +66,7 @@
 #endif
 #include "cobalt.h"
 
-#if IS_ENABLED(CONFIG_NF_CONNTRACK)
+#if IS_REACHABLE(CONFIG_NF_CONNTRACK)
 #include <net/netfilter/nf_conntrack_core.h>
 #include <net/netfilter/nf_conntrack_zones.h>
 #include <net/netfilter/nf_conntrack.h>
@@ -551,7 +551,7 @@ static bool cobalt_should_drop(struct cobalt_vars *vars,
 	return drop;
 }
 
-#if IS_ENABLED(CONFIG_NF_CONNTRACK)
+#if IS_REACHABLE(CONFIG_NF_CONNTRACK)
 #if KERNEL_VERSION(4, 0, 0) > LINUX_VERSION_CODE
 #define tc_skb_protocol(_skb) \
 (vlan_tx_tag_present(_skb) ? _skb->vlan_proto : _skb->protocol)
@@ -2563,17 +2563,26 @@ nla_put_failure:
 static int cake_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 {
 	struct cake_sched_data *q = qdisc_priv(sch);
-	struct tc_cake_xstats *st;
-	size_t size = sizeof(*st) + sizeof(struct tc_cake_tin_stats) * q->tin_cnt;
+	struct nlattr *stats = nla_nest_start(d->skb, TCA_STATS_APP);
 	int i;
 
-	st = cake_zalloc(size);
-
-	if (!st)
+	if (!stats)
 		return -1;
+#define PUT_STAT(type, attr, data) do {					\
+		if(nla_put_ ## type(d->skb, TCA_CAKE_STATS_ ## attr, data)) \
+			return -1;					\
+	} while (0);
 
-	st->version = 0x102; /* old userspace code discards versions > 0xFF */
-	st->tin_stats_size = sizeof(struct tc_cake_tin_stats);
+	PUT_STAT(u32, CAPACITY_ESTIMATE, q->avg_peak_bandwidth);
+	PUT_STAT(u32, MEMORY_LIMIT, q->buffer_limit);
+	PUT_STAT(u32, MEMORY_USED, q->buffer_max_used);
+
+	return nla_nest_end(d->skb, stats);
+
+#undef PUT_STAT
+
+//	st->version = 0x102; /* old userspace code discards versions > 0xFF */
+/*	st->tin_stats_size = sizeof(struct tc_cake_tin_stats);
 	st->tin_cnt = q->tin_cnt;
 
 	st->avg_trnoff = (q->avg_trnoff + 0x8000) >> 16;
@@ -2588,10 +2597,10 @@ static int cake_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 
 		tstat->threshold_rate = b->tin_rate_bps;
 		tstat->target_us      = cobalt_time_to_us(b->cparams.target);
-		tstat->interval_us    = cobalt_time_to_us(b->cparams.interval);
+		tstat->interval_us    = cobalt_time_to_us(b->cparams.interval);*/
 
 		/* TODO FIXME: add missing aspects of these composite stats */
-		tstat->sent.packets       = b->packets;
+/*		tstat->sent.packets       = b->packets;
 		tstat->sent.bytes	  = b->bytes;
 		tstat->dropped.packets    = b->tin_dropped;
 		tstat->ecn_marked.packets = b->tin_ecn_mark;
@@ -2621,7 +2630,7 @@ static int cake_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 
 	i = gnet_stats_copy_app(d, st, size);
 	cake_free(st);
-	return i;
+	return i;*/
 }
 
 static struct Qdisc_ops cake_qdisc_ops __read_mostly = {
