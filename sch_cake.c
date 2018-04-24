@@ -1,10 +1,12 @@
-/* COMMON Applications Kept Enhanced (CAKE) discipline - version 5
+// SPDX-License-Identifier: GPL-2.0 OR BSD-3-Clause
+
+/* COMMON Applications Kept Enhanced (CAKE) discipline
  *
- * Copyright (C) 2014-2017 Jonathan Morton <chromatix99@gmail.com>
- * Copyright (C) 2015-2017 Toke Høiland-Jørgensen <toke@toke.dk>
- * Copyright (C) 2014-2017 Dave Täht <dave.taht@gmail.com>
- * Copyright (C) 2015-2017 Sebastian Moeller <moeller0@gmx.de>
- * (C) 2015-2017 Kevin Darbyshire-Bryant <kevin@darbyshire-bryant.me.uk>
+ * Copyright (C) 2014-2018 Jonathan Morton <chromatix99@gmail.com>
+ * Copyright (C) 2015-2018 Toke Høiland-Jørgensen <toke@toke.dk>
+ * Copyright (C) 2014-2018 Dave Täht <dave.taht@gmail.com>
+ * Copyright (C) 2015-2018 Sebastian Moeller <moeller0@gmx.de>
+ * (C) 2015-2018 Kevin Darbyshire-Bryant <kevin@darbyshire-bryant.me.uk>
  * Copyright (C) 2017 Ryan Mounce <ryan@mounce.com.au>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -2049,7 +2051,7 @@ static int cake_config_precedence(struct Qdisc *sch)
  *	Max Reliability & LLT "Lo" (TOS1)
  *	Max Throughput (TOS2)
  *	Min Delay (TOS4)
- *  LLT "La" (TOS5)
+ *	LLT "La" (TOS5)
  *	Assured Forwarding 1 (AF1x) - x3
  *	Assured Forwarding 2 (AF2x) - x3
  *	Assured Forwarding 3 (AF3x) - x3
