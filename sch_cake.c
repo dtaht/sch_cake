@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0 OR BSD-3-Clause
-/*
- * COMMON Applications Kept Enhanced (CAKE) discipline - version 5
+
+/* COMMON Applications Kept Enhanced (CAKE) discipline
  *
  * Copyright (C) 2014-2018 Jonathan Morton <chromatix99@gmail.com>
  * Copyright (C) 2015-2018 Toke Høiland-Jørgensen <toke@toke.dk>
@@ -112,7 +112,7 @@
 #define CAKE_SET_WAYS (8)
 #define CAKE_MAX_TINS (8)
 #define CAKE_QUEUES (1024)
-#define US2TIME(a) (a * (u64) NSEC_PER_USEC)
+#define US2TIME(a) (a * (u64)NSEC_PER_USEC)
 
 typedef u64 cobalt_time_t;
 typedef s64 cobalt_tdiff_t;
@@ -695,7 +695,6 @@ cake_hash(struct cake_tin_data *q, const struct sk_buff *skb, int flow_mode)
 	if (unlikely(flow_mode == CAKE_FLOW_NONE))
 		return 0;
 
-
 	skb_flow_dissect_flow_keys(skb, &keys,
 				   FLOW_DISSECTOR_F_STOP_AT_FLOW_LABEL);
 
@@ -1195,7 +1194,7 @@ static inline u32 cake_overhead(struct cake_sched_data *q, struct sk_buff *skb)
 		 * This is conservative and easier to calculate than the
 		 * precise value.
 		 */
-		len += (len+63) / 64;
+		len += (len + 63) / 64;
 	}
 
 	if (q->max_adjlen < len)
@@ -1445,8 +1444,8 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 			if (q->time_next_packet < now) {
 				q->failsafe_next_packet = now;
 				q->time_next_packet = now;
-			} else if (q->time_next_packet > now
-				   && q->failsafe_next_packet > now) {
+			} else if (q->time_next_packet > now &&
+				   q->failsafe_next_packet > now) {
 				u64 next = min(q->time_next_packet,
 					       q->failsafe_next_packet);
 				sch->qstats.overlimits++;
@@ -1847,8 +1846,8 @@ retry:
 		/* Last packet in queue may be marked, shouldn't be dropped */
 		if (!cobalt_should_drop(&flow->cvars, &b->cparams, now, skb,
 					(b->bulk_flow_count *
-					 !!(q->rate_flags & CAKE_FLAG_INGRESS)))
-		    || !flow->head)
+					 !!(q->rate_flags & CAKE_FLAG_INGRESS))) ||
+		    !flow->head)
 			break;
 
 		/* drop this packet, get another one */
@@ -1960,7 +1959,7 @@ static void cake_set_rate(struct cake_tin_data *b, u64 rate, u32 mtu,
 
 	byte_target_ns = (byte_target * rate_ns) >> rate_shft;
 
-	b->cparams.target = max((byte_target_ns*3)/2, ns_target);
+	b->cparams.target = max((byte_target_ns * 3) / 2, ns_target);
 	b->cparams.interval = max(rtt_est_ns +
 				     b->cparams.target - ns_target,
 				     b->cparams.target * 2);
@@ -2032,7 +2031,7 @@ static int cake_config_precedence(struct Qdisc *sch)
  *	Max Reliability & LLT "Lo" (TOS1)
  *	Max Throughput (TOS2)
  *	Min Delay (TOS4)
- *  LLT "La" (TOS5)
+ *	LLT "La" (TOS5)
  *	Assured Forwarding 1 (AF1x) - x3
  *	Assured Forwarding 2 (AF2x) - x3
  *	Assured Forwarding 3 (AF3x) - x3
@@ -2209,7 +2208,6 @@ static int cake_config_diffserv3(struct Qdisc *sch)
 	return 0;
 }
 
-
 static void cake_reconfigure(struct Qdisc *sch)
 {
 	struct cake_sched_data *q = qdisc_priv(sch);
@@ -2265,7 +2263,7 @@ static void cake_reconfigure(struct Qdisc *sch)
 }
 
 static int cake_change(struct Qdisc *sch, struct nlattr *opt,
-		struct netlink_ext_ack *extack)
+		       struct netlink_ext_ack *extack)
 {
 	struct cake_sched_data *q = qdisc_priv(sch);
 	struct nlattr *tb[TCA_CAKE_MAX + 1];
@@ -2390,7 +2388,7 @@ static void cake_destroy(struct Qdisc *sch)
 }
 
 static int cake_init(struct Qdisc *sch, struct nlattr *opt,
-		struct netlink_ext_ack *extack)
+		     struct netlink_ext_ack *extack)
 {
 	struct cake_sched_data *q = qdisc_priv(sch);
 	int i, j;
