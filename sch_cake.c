@@ -259,7 +259,7 @@ struct cake_sched_data {
 	u64		last_reconfig_time;
 
 	/* packet length stats */
-	u32 avg_trnoff;
+	u32 avg_netoff;
 	u16 max_netlen;
 	u16 max_adjlen;
 	u16 min_netlen;
@@ -1158,7 +1158,7 @@ static inline u32 cake_overhead(struct cake_sched_data *q, struct sk_buff *skb)
 	u32 len = qdisc_pkt_len(skb);
 	u32 off = skb_network_offset(skb);
 
-	q->avg_trnoff = cake_ewma(q->avg_trnoff, off << 16, 8);
+	q->avg_netoff = cake_ewma(q->avg_netoff, off << 16, 8);
 
 	if (q->rate_flags & CAKE_FLAG_OVERHEAD)
 		len -= off;
@@ -2578,7 +2578,7 @@ static int cake_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 	PUT_STAT_U32(CAPACITY_ESTIMATE, q->avg_peak_bandwidth);
 	PUT_STAT_U32(MEMORY_LIMIT, q->buffer_limit);
 	PUT_STAT_U32(MEMORY_USED, q->buffer_max_used);
-	PUT_STAT_U32(AVG_TRNOFF, ((q->avg_trnoff + 0x8000) >> 16));
+	PUT_STAT_U32(AVG_NETOFF, ((q->avg_netoff + 0x8000) >> 16));
 	PUT_STAT_U32(MAX_NETLEN, q->max_netlen);
 	PUT_STAT_U32(MAX_ADJLEN, q->max_adjlen);
 	PUT_STAT_U32(MIN_NETLEN, q->min_netlen);
