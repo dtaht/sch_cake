@@ -985,7 +985,7 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 		/* new ack sequence must be greater
 		 */
 		if (thisconn &&
-		    (ntohl(tcph_check->ack_seq) > ntohl(tcph->ack_seq)))
+		    ((int32_t)(ntohl(tcph_check->ack_seq) - ntohl(tcph->ack_seq)) > 0))
 			continue;
 
 		/* DupACKs with an equal sequence number shouldn't be filtered,
