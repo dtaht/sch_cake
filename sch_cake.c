@@ -2534,9 +2534,9 @@ static int cake_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 	if (!stats)
 		return -1;
 
-#define PUT_STAT_U32(attr, data) do {					\
+#define PUT_STAT_U32(attr, data) do {				       \
 		if(nla_put_u32(d->skb, TCA_CAKE_STATS_ ## attr, data)) \
-			return -1;					\
+			goto nla_put_failure;			       \
 	} while (0);
 
 	PUT_STAT_U32(CAPACITY_ESTIMATE, q->avg_peak_bandwidth);
@@ -2552,16 +2552,16 @@ static int cake_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 
 	tstats = nla_nest_start(d->skb, TCA_CAKE_STATS_TIN_STATS);
 	if (!tstats)
-		return -1;
+		goto nla_put_failure;
 
 #define PUT_TSTAT_U32(attr, data) do {					\
 		if(nla_put_u32(d->skb, TCA_CAKE_TIN_STATS_ ## attr, data)) \
-			return -1;					\
+			goto nla_put_failure;				\
 	} while (0);
 #define PUT_TSTAT_U64(attr, data) do {					\
 		if(nla_put_u64_64bit(d->skb, TCA_CAKE_TIN_STATS_ ## attr, \
 					data, TCA_CAKE_TIN_STATS_PAD))	\
-			return -1;					\
+			goto nla_put_failure;				\
 	} while (0);
 
 	for (i = 0; i < q->tin_cnt; i++) {
@@ -2569,7 +2569,7 @@ static int cake_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 
 		ts = nla_nest_start(d->skb, i + 1);
 		if (!ts)
-			return -1;
+			goto nla_put_failure;
 
 		PUT_TSTAT_U32(THRESHOLD_RATE, b->tin_rate_bps);
 		PUT_TSTAT_U32(TARGET_US, cobalt_time_to_us(b->cparams.target));
@@ -2604,8 +2604,11 @@ static int cake_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 #undef PUT_TSTAT_U64
 
 	nla_nest_end(d->skb, tstats);
-
 	return nla_nest_end(d->skb, stats);
+
+nla_put_failure:
+	nla_nest_cancel(d->skb, stats);
+	return -1;
 }
 
 static struct Qdisc_ops cake_qdisc_ops __read_mostly = {
