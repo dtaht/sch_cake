@@ -88,6 +88,7 @@
 #define CAKE_SET_WAYS (8)
 #define CAKE_MAX_TINS (8)
 #define CAKE_QUEUES (1024)
+#define CAKE_SPLIT_GSO_THRESHOLD (125000000) /* 1Gbps */
 
 #ifndef CAKE_VERSION
 #define CAKE_VERSION "unknown"
@@ -238,7 +239,8 @@ enum {
 	CAKE_FLAG_OVERHEAD	   = BIT(0),
 	CAKE_FLAG_AUTORATE_INGRESS = BIT(1),
 	CAKE_FLAG_INGRESS	   = BIT(2),
-	CAKE_FLAG_WASH		   = BIT(3)
+	CAKE_FLAG_WASH		   = BIT(3),
+	CAKE_FLAG_SPLIT_GSO	   = BIT(4)
 };
 
 static u16 quantum_div[CAKE_QUEUES + 1] = {0};
@@ -1437,7 +1439,7 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 	 * or if we need to know individual packet sizes for framing overhead.
 	 */
 
-	if (skb_is_gso(skb)) {
+	if (skb_is_gso(skb) && q->rate_flags & CAKE_FLAG_SPLIT_GSO) {
 		struct sk_buff *segs, *nskb;
 		netdev_features_t features = netif_skb_features(skb);
 		/* signed slen to handle corner case
@@ -2337,6 +2339,12 @@ static int cake_change(struct Qdisc *sch, struct nlattr *opt,
 	if (tb[TCA_CAKE_MEMORY])
 		q->buffer_config_limit = nla_get_u32(tb[TCA_CAKE_MEMORY]);
 
+	if (q->rate_bps && (q->rate_bps <= CAKE_SPLIT_GSO_THRESHOLD ||
+			    q->rate_flags & CAKE_FLAG_OVERHEAD))
+		q->rate_flags |= CAKE_FLAG_SPLIT_GSO;
+	else
+		q->rate_flags &= ~CAKE_FLAG_SPLIT_GSO;
+
 	if (q->tins) {
 		sch_tree_lock(sch);
 		cake_reconfigure(sch);
@@ -2480,6 +2488,9 @@ static int cake_dump(struct Qdisc *sch, struct sk_buff *skb)
 		goto nla_put_failure;
 
 	if (nla_put_u32(skb, TCA_CAKE_NAT, !!(q->flow_mode & CAKE_FLOW_NAT_FLAG)))
+		goto nla_put_failure;
+
+	if (nla_put_u32(skb, TCA_CAKE_SPLIT_GSO, !!(q->rate_flags & CAKE_FLAG_SPLIT_GSO)))
 		goto nla_put_failure;
 
 	if (nla_put_u32(skb, TCA_CAKE_WASH,
