@@ -62,7 +62,7 @@
 #include <net/tcp.h>
 #include <net/flow_dissector.h>
 
-#if IS_ENABLED(CONFIG_NF_CONNTRACK)
+#if IS_REACHABLE(CONFIG_NF_CONNTRACK)
 #include <net/netfilter/nf_conntrack_core.h>
 #include <net/netfilter/nf_conntrack_zones.h>
 #include <net/netfilter/nf_conntrack.h>
@@ -616,7 +616,7 @@ static bool cobalt_should_drop(struct cobalt_vars *vars,
 	return drop;
 }
 
-#if IS_ENABLED(CONFIG_NF_CONNTRACK)
+#if IS_REACHABLE(CONFIG_NF_CONNTRACK)
 
 static inline void cake_update_flowkeys(struct flow_keys *keys,
 					const struct sk_buff *skb)
