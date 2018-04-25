@@ -1130,8 +1130,22 @@ static inline cobalt_time_t cake_ewma(cobalt_time_t avg, cobalt_time_t sample,
 
 static inline u32 cake_overhead(struct cake_sched_data *q, struct sk_buff *skb)
 {
-	u32 len = qdisc_pkt_len(skb);
+	const struct skb_shared_info *shinfo = skb_shinfo(skb);
 	u32 off = skb_network_offset(skb);
+	u32 len = qdisc_pkt_len(skb);
+	u16 segs = 1;
+
+	if (unlikely(shinfo->gso_size)) {
+		/* qdisc_pkt_len was already adjusted with the header sizes, so
+		 * this should give us the wire size of a single packet, that we
+		 * can adjust and multiply by the number of segments below. */
+		segs = shinfo->gso_segs;
+
+		if (unlikely(!segs))
+			segs = DIV_ROUND_UP(skb->len, shinfo->gso_size);
+
+		len = DIV_ROUND_UP(len, segs);
+	}
 
 	q->avg_netoff = cake_ewma(q->avg_netoff, off << 16, 8);
 
@@ -1165,7 +1179,7 @@ static inline u32 cake_overhead(struct cake_sched_data *q, struct sk_buff *skb)
 	if (q->min_adjlen > len)
 		q->min_adjlen = len;
 
-	get_cobalt_cb(skb)->adjusted_len = len;
+	get_cobalt_cb(skb)->adjusted_len = len * segs;
 	return len;
 }
 
@@ -2339,8 +2353,7 @@ static int cake_change(struct Qdisc *sch, struct nlattr *opt,
 	if (tb[TCA_CAKE_MEMORY])
 		q->buffer_config_limit = nla_get_u32(tb[TCA_CAKE_MEMORY]);
 
-	if (q->rate_bps && (q->rate_bps <= CAKE_SPLIT_GSO_THRESHOLD ||
-			    q->rate_flags & CAKE_FLAG_OVERHEAD))
+	if (q->rate_bps && q->rate_bps <= CAKE_SPLIT_GSO_THRESHOLD)
 		q->rate_flags |= CAKE_FLAG_SPLIT_GSO;
 	else
 		q->rate_flags &= ~CAKE_FLAG_SPLIT_GSO;
