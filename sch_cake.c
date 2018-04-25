@@ -2365,6 +2365,8 @@ static int cake_change(struct Qdisc *sch, struct nlattr *opt,
 	return 0;
 }
 
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 12, 0)
 static void *cake_zalloc(size_t sz)
 {
 	void *ptr = kzalloc(sz, GFP_KERNEL | __GFP_NOWARN);
@@ -2373,6 +2375,12 @@ static void *cake_zalloc(size_t sz)
 		ptr = vzalloc(sz);
 	return ptr;
 }
+#else
+static inline void *cake_zalloc(size_t sz)
+{
+	return kvzalloc(sz, GFP_KERNEL | __GFP_NOWARN);
+}
+#endif
 
 static void cake_free(void *addr)
 {
