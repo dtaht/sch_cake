@@ -58,3 +58,7 @@ static inline void qdisc_qstats_drop(struct Qdisc *sch)
 #define IS_REACHABLE(option) (config_enabled(option) || \
 		 (config_enabled(option##_MODULE) && config_enabled(MODULE)))
 #endif
+
+#if KERNEL_VERSION(4, 7, 0) > LINUX_VERSION_CODE
+#define nla_put_u64_64bit(skb, attrtype, value, padattr) nla_put_u64(skb, attrtype, value)
+#endif
