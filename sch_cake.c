@@ -1461,28 +1461,9 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 			get_cobalt_cb(segs)->adjusted_len = cake_overhead(q, segs);
 			flow_queue_add(flow, segs);
 
-			if (q->ack_filter)
-				ack = cake_ack_filter(q, flow);
-
-			if (ack) {
-				b->ack_drops++;
-				sch->qstats.drops++;
-				b->bytes += ack->len;
-				slen += segs->len - ack->len;
-				q->buffer_used += segs->truesize -
-					ack->truesize;
-				if (q->rate_flags & CAKE_FLAG_INGRESS)
-					cake_advance_shaper(q, b, ack,
-							    now, true);
-
-				qdisc_tree_reduce_backlog(sch, 1,
-							  qdisc_pkt_len(ack));
-				consume_skb(ack);
-			} else {
-				sch->q.qlen++;
-				slen += segs->len;
-				q->buffer_used += segs->truesize;
-			}
+			sch->q.qlen++;
+			slen += segs->len;
+			q->buffer_used += segs->truesize;
 			b->packets++;
 			segs = nskb;
 		}
