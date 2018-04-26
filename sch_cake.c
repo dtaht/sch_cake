@@ -875,12 +875,16 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 	ipv6h = skb->encapsulation ? inner_ipv6_hdr(skb) : ipv6_hdr(skb);
 
 	/* check that the innermost network header is v4/v6, and contains TCP */
-	if (iph->version == 4) {
+	if (pskb_may_pull(skb, ((unsigned char *)iph - skb->head) + sizeof(struct iphdr)) &&
+	    iph->version == 4) {
 		if (iph->protocol != IPPROTO_TCP)
 			return NULL;
 		seglen = ntohs(iph->tot_len) - (4 * iph->ihl);
 		tcph = (struct tcphdr *)((void *)iph + (4 * iph->ihl));
-	} else if (ipv6h->version == 6) {
+		if (!pskb_may_pull(skb, ((unsigned char *)tcph - skb->head) + sizeof(struct tcphdr)))
+			return NULL;
+	} else if (pskb_may_pull(skb, ((unsigned char *)ipv6h - skb->head) + sizeof(struct ipv6hdr) + sizeof(struct tcphdr)) &&
+	           ipv6h->version == 6) {
 		if (ipv6h->nexthdr != IPPROTO_TCP)
 			return NULL;
 		seglen = ntohs(ipv6h->payload_len);
@@ -923,7 +927,8 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 		ipv6h_check = skb_check->encapsulation ?
 			inner_ipv6_hdr(skb_check) : ipv6_hdr(skb_check);
 
-		if (iph_check->version == 4) {
+		if (pskb_may_pull(skb_check, ((unsigned char *)iph_check - skb_check->head) + sizeof(struct iphdr)) &&
+		    iph_check->version == 4) {
 			if (iph_check->protocol != IPPROTO_TCP)
 				continue;
 			seglen = ntohs(iph_check->tot_len) - (4 * iph_check->ihl);
@@ -936,7 +941,8 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 			} else {
 				thisconn = false;
 			}
-		} else if (ipv6h_check->version == 6) {
+		} else if (pskb_may_pull(skb_check, ((unsigned char *)ipv6h_check - skb_check->head) + sizeof(struct ipv6hdr)) &&
+		           ipv6h_check->version == 6) {
 			if (ipv6h_check->nexthdr != IPPROTO_TCP)
 				continue;
 			seglen = ntohs(ipv6h_check->payload_len);
@@ -952,6 +958,9 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 		} else {
 			continue;
 		}
+
+		if (!pskb_may_pull(skb_check, ((unsigned char *)tcph_check - skb_check->head) + sizeof(struct tcphdr)))
+			continue;
 
 		/* stricter criteria apply to ACKs that we may filter
 		 * 3 reserved flags must be unset to avoid future breakage
@@ -994,7 +1003,8 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 		 * but we can filter if the triggering packet is a SACK
 		 */
 		if (thisconn &&
-		    (ntohl(tcph_check->ack_seq) == ntohl(tcph->ack_seq))) {
+		    (ntohl(tcph_check->ack_seq) == ntohl(tcph->ack_seq)) &&
+		    pskb_may_pull(skb, ((unsigned char *)tcph - skb->head) + (tcph->doff * 4))) {
 			/* inspired by tcp_parse_options in tcp_input.c */
 			bool sack = false;
 			int length = (tcph->doff * 4) - sizeof(struct tcphdr);
