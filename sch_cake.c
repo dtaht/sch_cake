@@ -1136,15 +1136,40 @@ static inline u32 cake_overhead(struct cake_sched_data *q, struct sk_buff *skb)
 	u16 segs = 1;
 
 	if (unlikely(shinfo->gso_size)) {
-		/* qdisc_pkt_len was already adjusted with the header sizes, so
-		 * this should give us the wire size of a single packet, that we
-		 * can adjust and multiply by the number of segments below. */
-		segs = shinfo->gso_segs;
+		/* borrowed from qdisc_pkt_len_init() */
+		unsigned int hdr_len;
 
-		if (unlikely(!segs))
-			segs = DIV_ROUND_UP(skb->len, shinfo->gso_size);
+		hdr_len = skb_transport_header(skb) - skb_mac_header(skb);
 
-		len = DIV_ROUND_UP(len, segs);
+                /* + transport layer */
+                if (likely(shinfo->gso_type & (SKB_GSO_TCPV4 | SKB_GSO_TCPV6))) {
+                        const struct tcphdr *th;
+                        struct tcphdr _tcphdr;
+
+                        th = skb_header_pointer(skb, skb_transport_offset(skb),
+                                                sizeof(_tcphdr), &_tcphdr);
+                        if (likely(th))
+                                hdr_len += __tcp_hdrlen(th);
+                } else {
+                        struct udphdr _udphdr;
+
+                        if (skb_header_pointer(skb, skb_transport_offset(skb),
+                                               sizeof(_udphdr), &_udphdr))
+                                hdr_len += sizeof(struct udphdr);
+                }
+
+		if (shinfo->gso_type & SKB_GSO_DODGY)
+			segs = DIV_ROUND_UP(skb->len - hdr_len,
+                                                shinfo->gso_size);
+		else
+			segs = shinfo->gso_segs;
+
+		/* The last segment may be shorter; we ignore this, which means
+		 * that we will over-estimate the size of the whole GSO segment
+		 * by the difference in size. This is conservative, so we live
+		 * with that to avoid the complexity of dealing with it.
+		 */
+		len = shinfo->gso_size + hdr_len;
 	}
 
 	q->avg_netoff = cake_ewma(q->avg_netoff, off << 16, 8);
