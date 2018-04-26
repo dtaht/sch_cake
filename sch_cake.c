@@ -2393,22 +2393,6 @@ static int cake_change(struct Qdisc *sch, struct nlattr *opt,
 }
 
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 12, 0)
-static void *cake_zalloc(size_t sz)
-{
-	void *ptr = kzalloc(sz, GFP_KERNEL | __GFP_NOWARN);
-
-	if (!ptr)
-		ptr = vzalloc(sz);
-	return ptr;
-}
-#else
-static inline void *cake_zalloc(size_t sz)
-{
-	return kvzalloc(sz, GFP_KERNEL | __GFP_NOWARN);
-}
-#endif
-
 static void cake_free(void *addr)
 {
 	if (addr)
@@ -2466,7 +2450,8 @@ static int cake_init(struct Qdisc *sch, struct nlattr *opt,
 	for (i = 1; i <= CAKE_QUEUES; i++)
 		quantum_div[i] = 65535 / i;
 
-	q->tins = cake_zalloc(CAKE_MAX_TINS * sizeof(struct cake_tin_data));
+	q->tins = kvzalloc(CAKE_MAX_TINS * sizeof(struct cake_tin_data),
+			   GFP_KERNEL | __GFP_NOWARN);
 	if (!q->tins)
 		goto nomem;
 
