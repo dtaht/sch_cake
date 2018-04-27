@@ -855,27 +855,33 @@ flow_queue_add(struct cake_flow *flow, struct sk_buff *skb)
 
 static inline struct tcphdr *cake_get_tcphdr(struct sk_buff *skb)
 {
-	struct iphdr *iph;
 	struct ipv6hdr *ipv6h;
+	struct iphdr *iph;
+	struct tcphdr *th;
 
 
 	switch (skb->protocol) {
 	case cpu_to_be16(ETH_P_IP):
-		if (!pskb_may_pull(skb, skb_inner_network_offset(skb) + sizeof(struct iphdr)))
+		if (!pskb_may_pull(skb,
+				   (skb->encapsulation ?
+					   skb_inner_network_offset(skb) :
+					   skb_network_offset(skb)) +
+				    sizeof(struct iphdr)))
 			return NULL;
 
-		iph = inner_ip_hdr(skb);
+		iph = skb->encapsulation ? inner_ip_hdr(skb) : ip_hdr(skb);
 
 		if (iph->protocol != IPPROTO_TCP)
 			return NULL;
 
-		if (!pskb_may_pull(skb, skb_inner_transport_offset(skb) + sizeof(struct tcphdr)))
-			return NULL;
-
-		return inner_tcp_hdr(skb);
+		break;
 
 	case cpu_to_be16(ETH_P_IPV6):
-		if (!pskb_may_pull(skb, skb_inner_network_offset(skb) + sizeof(struct ipv6hdr)))
+		if (!pskb_may_pull(skb,
+				   (skb->encapsulation ?
+					   skb_inner_network_offset(skb) :
+					   skb_network_offset(skb)) +
+				    sizeof(struct ipv6hdr)))
 			return NULL;
 
 		ipv6h = inner_ipv6_hdr(skb);
@@ -883,13 +889,26 @@ static inline struct tcphdr *cake_get_tcphdr(struct sk_buff *skb)
 		if (ipv6h->nexthdr != IPPROTO_TCP)
 			return NULL;
 
-		if (!pskb_may_pull(skb, skb_inner_transport_offset(skb) + sizeof(struct tcphdr)))
-			return NULL;
+		break;
 
-		return inner_tcp_hdr(skb);
 	default:
 		return NULL;
 	}
+
+	if (!pskb_may_pull(skb,
+			   (skb->encapsulation ?
+				   skb_inner_transport_offset(skb) :
+				   skb_transport_offset(skb)) +
+			    sizeof(struct tcphdr)))
+		return NULL;
+
+	th = skb->encapsulation ? inner_tcp_hdr(skb) : tcp_hdr(skb);
+
+	if (!pskb_may_pull(skb, ((unsigned_char *)th - skb->head) + __tcp_hdrlen(th)))
+		return NULL;
+
+	return skb->encapsulation ? inner_tcp_hdr(skb) : tcp_hdr(skb);
+
 }
 
 static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
@@ -953,18 +972,24 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 		    skb->protocol != skb_check->protocol)
 			continue;
 
-		tcph_check = inner_tcp_hdr(skb);
+		tcph_check = (skb_check->encapsulation ? inner_tcp_hdr(skb_check) :
+			                                 tcp_hdr(skb_check));
 
 		if (skb_check->protocol == cpu_to_be16(ETH_P_IP)) {
-			iph = inner_ip_hdr(skb);
-			iph_check = inner_ip_hdr(skb_check);
+			iph = skb->encapsulation ? inner_ip_hdr(skb) : ip_hdr(skb);
+			iph_check = (skb_check->encapsulation ?
+				     inner_ip_hdr(skb_check) :
+				     ip_hdr(skb_check));
+
 			seglen = ntohs(iph_check->tot_len) - (4 * iph_check->ihl);
 
 			thisconn = (iph_check->saddr == iph->saddr &&
 				    iph_check->daddr == iph->daddr);
 		} else if (skb_check->protocol == cpu_to_be16(ETH_P_IPV6)) {
-			ipv6h = inner_ipv6_hdr(skb);
-			ipv6h_check = inner_ipv6_hdr(skb_check);
+			ipv6h = skb->encapsulation ? inner_ipv6_hdr(skb) : ipv6_hdr(skb);
+			ipv6h_check = (skb_check->encapsulation ?
+				       inner_ipv6_hdr(skb_check) :
+				       ipv6_hdr(skb_check));
 			seglen = ntohs(ipv6h_check->payload_len);
 
 			thisconn = (ipv6_addr_cmp(&ipv6h_check->saddr, &ipv6h->saddr) &&
@@ -1015,11 +1040,10 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 		 * but we can filter if the triggering packet is a SACK
 		 */
 		if (thisconn &&
-		    (ntohl(tcph_check->ack_seq) == ntohl(tcph->ack_seq)) &&
-		    pskb_may_pull(skb, ((unsigned char *)tcph - skb->head) + (tcph->doff * 4))) {
+		    (ntohl(tcph_check->ack_seq) == ntohl(tcph->ack_seq))) {
 			/* inspired by tcp_parse_options in tcp_input.c */
 			bool sack = false;
-			int length = (tcph->doff * 4) - sizeof(struct tcphdr);
+			int length = __tcp_hdrlen(tcph) - sizeof(struct tcphdr);
 			const u8 *ptr = (const u8 *)(tcph + 1);
 
 			while (length > 0) {
