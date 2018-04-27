@@ -904,7 +904,7 @@ static inline struct tcphdr *cake_get_tcphdr(struct sk_buff *skb)
 
 	th = skb->encapsulation ? inner_tcp_hdr(skb) : tcp_hdr(skb);
 
-	if (!pskb_may_pull(skb, ((unsigned char *)th - skb->head) + __tcp_hdrlen(th)))
+	if (!pskb_may_pull(skb, ((unsigned char *)th - skb->data) + __tcp_hdrlen(th)))
 		return NULL;
 
 	return skb->encapsulation ? inner_tcp_hdr(skb) : tcp_hdr(skb);
