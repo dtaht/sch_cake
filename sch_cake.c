@@ -65,7 +65,6 @@
 #include <linux/reciprocal_div.h>
 #include <net/netlink.h>
 #include <linux/version.h>
-#include "pkt_sched.h"
 #include <linux/if_vlan.h>
 #include <net/pkt_sched.h>
 #include <net/tcp.h>
