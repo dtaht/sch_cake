@@ -276,6 +276,7 @@ enum {
 struct cobalt_skb_cb {
 	cobalt_time_t enqueue_time;
 	u32           adjusted_len;
+	u8            ack_filter_eligible;
 };
 
 static inline cobalt_time_t cobalt_get_time(void)
