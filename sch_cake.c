@@ -1653,8 +1653,6 @@ static struct sk_buff *cake_dequeue_one(struct Qdisc *sch)
 	struct sk_buff *skb = NULL;
 	u32 len;
 
-	/* WARN_ON(flow != container_of(vars, struct cake_flow, cvars)); */
-
 	if (flow->head) {
 		skb = dequeue_head(flow);
 		len = qdisc_pkt_len(skb);
