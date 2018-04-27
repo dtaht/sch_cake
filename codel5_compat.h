@@ -51,19 +51,3 @@ static inline void qdisc_qstats_drop(struct Qdisc *sch)
 }
 
 #endif
-
-#if !defined(IS_REACHABLE)
-#define IS_REACHABLE(option) (IS_BUILTIN(option) ||	\
-				(IS_MODULE(option) && __is_defined(MODULE)))
-#endif
-
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 12, 0)
-static void *kvzalloc(size_t sz, gfp_t flags)
-{
-	void *ptr = kzalloc(sz, flags);
-
-	if (!ptr)
-		ptr = vzalloc(sz);
-	return ptr;
-}
-#endif
