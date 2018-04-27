@@ -2431,7 +2431,7 @@ static int cake_init(struct Qdisc *sch, struct nlattr *opt,
 
 	sch->limit = 10240;
 	q->tin_mode = CAKE_DIFFSERV_DIFFSERV3;
-	q->flow_mode  = CAKE_FLOW_TRIPLE | CAKE_FLOW_NAT_FLAG;
+	q->flow_mode  = CAKE_FLOW_TRIPLE;
 
 	q->rate_bps = 0; /* unlimited by default */
 
