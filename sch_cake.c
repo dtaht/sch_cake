@@ -1016,7 +1016,7 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 
 		else if (((tcp_flag_word(tcph_check) &
 			   cpu_to_be32(0x0E3F0000)) != TCP_FLAG_ACK) ||
-			 ((seglen - 4 * tcph_check->doff) != 0))
+			 ((seglen - __tcp_hdrlen(tcph_check)) != 0))
 			pure_ack = false;
 
 		else
