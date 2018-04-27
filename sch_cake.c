@@ -1209,7 +1209,7 @@ static inline u32 cake_overhead(struct cake_sched_data *q, struct sk_buff *skb)
                                 hdr_len += sizeof(struct udphdr);
                 }
 
-		if (shinfo->gso_type & SKB_GSO_DODGY)
+		if (unlikely(shinfo->gso_type & SKB_GSO_DODGY))
 			segs = DIV_ROUND_UP(skb->len - hdr_len,
                                                 shinfo->gso_size);
 		else
