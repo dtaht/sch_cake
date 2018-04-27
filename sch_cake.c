@@ -1484,17 +1484,12 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 	if (unlikely(len > b->max_skblen))
 		b->max_skblen = len;
 
-	/* Split GSO aggregates if they're likely to impair flow isolation
-	 * or if we need to know individual packet sizes for framing overhead.
-	 */
+	/* Split GSO aggregates if they're likely to impair flow isolation */
 
 	if (skb_is_gso(skb) && q->rate_flags & CAKE_FLAG_SPLIT_GSO) {
 		struct sk_buff *segs, *nskb;
 		netdev_features_t features = netif_skb_features(skb);
-		/* signed slen to handle corner case
-		 * suppressed ACK larger than trigger
-		 */
-		int slen = 0;
+		unsigned int slen = 0;
 
 		segs = skb_gso_segment(skb, features & ~NETIF_F_GSO_MASK);
 		if (IS_ERR_OR_NULL(segs))
