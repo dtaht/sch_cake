@@ -80,6 +80,7 @@
 #define CAKE_SET_WAYS (8)
 #define CAKE_MAX_TINS (8)
 #define CAKE_QUEUES (1024)
+#define CAKE_SPLIT_GSO_THRESHOLD (125000000) /* 1Gbps */
 #define US2TIME(a) (a * (u64)NSEC_PER_USEC)
 
 typedef u64 cobalt_time_t;
@@ -263,7 +264,8 @@ enum {
 	CAKE_FLAG_OVERHEAD	   = BIT(0),
 	CAKE_FLAG_AUTORATE_INGRESS = BIT(1),
 	CAKE_FLAG_INGRESS	   = BIT(2),
-	CAKE_FLAG_WASH		   = BIT(3)
+	CAKE_FLAG_WASH		   = BIT(3),
+	CAKE_FLAG_SPLIT_GSO	   = BIT(4)
 };
 
 /* COBALT operates the Codel and BLUE algorithms in parallel, in order to
@@ -882,12 +884,16 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 	ipv6h = skb->encapsulation ? inner_ipv6_hdr(skb) : ipv6_hdr(skb);
 
 	/* check that the innermost network header is v4/v6, and contains TCP */
-	if (iph->version == 4) {
+	if (pskb_may_pull(skb, ((unsigned char *)iph - skb->head) + sizeof(struct iphdr)) &&
+	    iph->version == 4) {
 		if (iph->protocol != IPPROTO_TCP)
 			return NULL;
 		seglen = ntohs(iph->tot_len) - (4 * iph->ihl);
 		tcph = (struct tcphdr *)((void *)iph + (4 * iph->ihl));
-	} else if (ipv6h->version == 6) {
+		if (!pskb_may_pull(skb, ((unsigned char *)tcph - skb->head) + sizeof(struct tcphdr)))
+			return NULL;
+	} else if (pskb_may_pull(skb, ((unsigned char *)ipv6h - skb->head) + sizeof(struct ipv6hdr) + sizeof(struct tcphdr)) &&
+	           ipv6h->version == 6) {
 		if (ipv6h->nexthdr != IPPROTO_TCP)
 			return NULL;
 		seglen = ntohs(ipv6h->payload_len);
@@ -931,7 +937,8 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 		ipv6h_check = skb_check->encapsulation ?
 			inner_ipv6_hdr(skb_check) : ipv6_hdr(skb_check);
 
-		if (iph_check->version == 4) {
+		if (pskb_may_pull(skb_check, ((unsigned char *)iph_check - skb_check->head) + sizeof(struct iphdr)) &&
+		    iph_check->version == 4) {
 			if (iph_check->protocol != IPPROTO_TCP)
 				continue;
 			seglen = (ntohs(iph_check->tot_len) -
@@ -945,7 +952,8 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 			} else {
 				thisconn = false;
 			}
-		} else if (ipv6h_check->version == 6) {
+		} else if (pskb_may_pull(skb_check, ((unsigned char *)ipv6h_check - skb_check->head) + sizeof(struct ipv6hdr)) &&
+		           ipv6h_check->version == 6) {
 			if (ipv6h_check->nexthdr != IPPROTO_TCP)
 				continue;
 			seglen = ntohs(ipv6h_check->payload_len);
@@ -962,6 +970,9 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 		} else {
 			continue;
 		}
+
+		if (!pskb_may_pull(skb_check, ((unsigned char *)tcph_check - skb_check->head) + sizeof(struct tcphdr)))
+			continue;
 
 		/* stricter criteria apply to ACKs that we may filter
 		 * 3 reserved flags must be unset to avoid future breakage
@@ -997,14 +1008,15 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 		/* new ack sequence must be greater
 		 */
 		if (thisconn &&
-		    (ntohl(tcph_check->ack_seq) > ntohl(tcph->ack_seq)))
+		    ((int32_t)(ntohl(tcph_check->ack_seq) - ntohl(tcph->ack_seq)) > 0))
 			continue;
 
 		/* DupACKs with an equal sequence number shouldn't be filtered,
 		 * but we can filter if the triggering packet is a SACK
 		 */
 		if (thisconn &&
-		    (ntohl(tcph_check->ack_seq) == ntohl(tcph->ack_seq))) {
+		    (ntohl(tcph_check->ack_seq) == ntohl(tcph->ack_seq)) &&
+		    pskb_may_pull(skb, ((unsigned char *)tcph - skb->head) + (tcph->doff * 4))) {
 			/* inspired by tcp_parse_options in tcp_input.c */
 			bool sack = false;
 			int length = (tcph->doff * 4) - sizeof(struct tcphdr);
@@ -1140,8 +1152,47 @@ static inline cobalt_time_t cake_ewma(cobalt_time_t avg, cobalt_time_t sample,
 
 static inline u32 cake_overhead(struct cake_sched_data *q, struct sk_buff *skb)
 {
-	u32 len = qdisc_pkt_len(skb);
+	const struct skb_shared_info *shinfo = skb_shinfo(skb);
 	u32 off = skb_network_offset(skb);
+	u32 len = qdisc_pkt_len(skb);
+	u16 segs = 1;
+
+	if (unlikely(shinfo->gso_size)) {
+		/* borrowed from qdisc_pkt_len_init() */
+		unsigned int hdr_len;
+
+		hdr_len = skb_transport_header(skb) - skb_mac_header(skb);
+
+                /* + transport layer */
+                if (likely(shinfo->gso_type & (SKB_GSO_TCPV4 | SKB_GSO_TCPV6))) {
+                        const struct tcphdr *th;
+                        struct tcphdr _tcphdr;
+
+                        th = skb_header_pointer(skb, skb_transport_offset(skb),
+                                                sizeof(_tcphdr), &_tcphdr);
+                        if (likely(th))
+                                hdr_len += __tcp_hdrlen(th);
+                } else {
+                        struct udphdr _udphdr;
+
+                        if (skb_header_pointer(skb, skb_transport_offset(skb),
+                                               sizeof(_udphdr), &_udphdr))
+                                hdr_len += sizeof(struct udphdr);
+                }
+
+		if (shinfo->gso_type & SKB_GSO_DODGY)
+			segs = DIV_ROUND_UP(skb->len - hdr_len,
+                                                shinfo->gso_size);
+		else
+			segs = shinfo->gso_segs;
+
+		/* The last segment may be shorter; we ignore this, which means
+		 * that we will over-estimate the size of the whole GSO segment
+		 * by the difference in size. This is conservative, so we live
+		 * with that to avoid the complexity of dealing with it.
+		 */
+		len = shinfo->gso_size + hdr_len;
+	}
 
 	q->avg_netoff = cake_ewma(q->avg_netoff, off << 16, 8);
 
@@ -1175,7 +1226,7 @@ static inline u32 cake_overhead(struct cake_sched_data *q, struct sk_buff *skb)
 	if (q->min_adjlen > len)
 		q->min_adjlen = len;
 
-	get_cobalt_cb(skb)->adjusted_len = len;
+	get_cobalt_cb(skb)->adjusted_len = len * segs;
 	return len;
 }
 
@@ -1434,7 +1485,7 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 	 * or if we need to know individual packet sizes for framing overhead.
 	 */
 
-	if (skb_is_gso(skb)) {
+	if (skb_is_gso(skb) && q->rate_flags & CAKE_FLAG_SPLIT_GSO) {
 		struct sk_buff *segs, *nskb;
 		netdev_features_t features = netif_skb_features(skb);
 		/* signed slen to handle corner case
@@ -1455,28 +1506,9 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 									  segs);
 			flow_queue_add(flow, segs);
 
-			if (q->ack_filter)
-				ack = cake_ack_filter(q, flow);
-
-			if (ack) {
-				b->ack_drops++;
-				sch->qstats.drops++;
-				b->bytes += ack->len;
-				slen += segs->len - ack->len;
-				q->buffer_used += segs->truesize -
-					ack->truesize;
-				if (q->rate_flags & CAKE_FLAG_INGRESS)
-					cake_advance_shaper(q, b, ack,
-							    now, true);
-
-				qdisc_tree_reduce_backlog(sch, 1,
-							  qdisc_pkt_len(ack));
-				consume_skb(ack);
-			} else {
-				sch->q.qlen++;
-				slen += segs->len;
-				q->buffer_used += segs->truesize;
-			}
+			sch->q.qlen++;
+			slen += segs->len;
+			q->buffer_used += segs->truesize;
 			b->packets++;
 			segs = nskb;
 		}
@@ -2326,6 +2358,11 @@ static int cake_change(struct Qdisc *sch, struct nlattr *opt,
 	if (tb[TCA_CAKE_MEMORY])
 		q->buffer_config_limit = nla_get_u32(tb[TCA_CAKE_MEMORY]);
 
+	if (q->rate_bps && q->rate_bps <= CAKE_SPLIT_GSO_THRESHOLD)
+		q->rate_flags |= CAKE_FLAG_SPLIT_GSO;
+	else
+		q->rate_flags &= ~CAKE_FLAG_SPLIT_GSO;
+
 	if (q->tins) {
 		sch_tree_lock(sch);
 		cake_reconfigure(sch);
@@ -2335,14 +2372,6 @@ static int cake_change(struct Qdisc *sch, struct nlattr *opt,
 	return 0;
 }
 
-static void *cake_zalloc(size_t sz)
-{
-	void *ptr = kzalloc(sz, GFP_KERNEL | __GFP_NOWARN);
-
-	if (!ptr)
-		ptr = vzalloc(sz);
-	return ptr;
-}
 
 static void cake_free(void *addr)
 {
@@ -2368,7 +2397,7 @@ static int cake_init(struct Qdisc *sch, struct nlattr *opt,
 
 	sch->limit = 10240;
 	q->tin_mode = CAKE_DIFFSERV_DIFFSERV3;
-	q->flow_mode  = CAKE_FLOW_TRIPLE;
+	q->flow_mode  = CAKE_FLOW_TRIPLE | CAKE_FLOW_NAT_FLAG;
 
 	q->rate_bps = 0; /* unlimited by default */
 
@@ -2393,7 +2422,8 @@ static int cake_init(struct Qdisc *sch, struct nlattr *opt,
 	for (i = 1; i <= CAKE_QUEUES; i++)
 		quantum_div[i] = 65535 / i;
 
-	q->tins = cake_zalloc(CAKE_MAX_TINS * sizeof(struct cake_tin_data));
+	q->tins = kvzalloc(CAKE_MAX_TINS * sizeof(struct cake_tin_data),
+			   GFP_KERNEL | __GFP_NOWARN);
 	if (!q->tins)
 		goto nomem;
 
@@ -2455,6 +2485,9 @@ static int cake_dump(struct Qdisc *sch, struct sk_buff *skb)
 
 	if (nla_put_u32(skb, TCA_CAKE_NAT,
 			!!(q->flow_mode & CAKE_FLOW_NAT_FLAG)))
+		goto nla_put_failure;
+
+	if (nla_put_u32(skb, TCA_CAKE_SPLIT_GSO, !!(q->rate_flags & CAKE_FLAG_SPLIT_GSO)))
 		goto nla_put_failure;
 
 	if (nla_put_u32(skb, TCA_CAKE_WASH,

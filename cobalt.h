@@ -54,9 +54,6 @@ typedef s64 cobalt_tdiff_t;
 #define MS2TIME(a) (a * (u64) NSEC_PER_MSEC)
 #define US2TIME(a) (a * (u64) NSEC_PER_USEC)
 
-#define codel_stats_copy_queue(a, b, c, d) gnet_stats_copy_queue(a, b, c, d)
-#define codel_watchdog_schedule_ns(a, b, c) qdisc_watchdog_schedule_ns(a, b, c)
-
 #if KERNEL_VERSION(3, 18, 0) > LINUX_VERSION_CODE
 #include "codel5_compat.h"
 #endif
@@ -159,5 +156,21 @@ static bool cobalt_should_drop(struct cobalt_vars *vars,
 			       cobalt_time_t now,
 			       struct sk_buff *skb,
 			       u32 bulk_flows);
+
+#if !defined(IS_REACHABLE)
+#define IS_REACHABLE(option) (IS_BUILTIN(option) ||	\
+				(IS_MODULE(option) && __is_defined(MODULE)))
+#endif
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 12, 0)
+static void *kvzalloc(size_t sz, gfp_t flags)
+{
+	void *ptr = kzalloc(sz, flags);
+
+	if (!ptr)
+		ptr = vzalloc(sz);
+	return ptr;
+}
+#endif
 
 #endif
