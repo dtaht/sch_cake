@@ -857,7 +857,6 @@ static inline struct tcphdr *cake_get_tcphdr(struct sk_buff *skb)
 {
 	struct ipv6hdr *ipv6h;
 	struct iphdr *iph;
-	struct tcphdr *th;
 
 	/* check IPv6 header size immediately, since for IPv4 we need the space
 	 * for the TCP header anyway
@@ -878,7 +877,8 @@ static inline struct tcphdr *cake_get_tcphdr(struct sk_buff *skb)
 						 sizeof(struct ipv6hdr))))
 				return NULL;
 
-			ipv6h = skb_network_header(skb) + ip_hdrlen(skb);
+			ipv6h = (struct ipv6hdr *)(skb_network_header(skb) +
+						   ip_hdrlen(skb));
 
 			if (ipv6h->nexthdr != IPPROTO_TCP)
 				return NULL;
