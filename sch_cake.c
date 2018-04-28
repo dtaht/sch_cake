@@ -880,7 +880,7 @@ static inline struct tcphdr *cake_get_tcphdr(struct sk_buff *skb)
 			iph = ip_hdr(skb);
 			ipv6h = (struct ipv6hdr *)((unsigned char*)iph +
 						   ip_hdrlen(skb));
-			if (ipv6->nexthdr != IPPROTO_TCP)
+			if (ipv6h->nexthdr != IPPROTO_TCP)
 				return NULL;
 
 			skb_set_inner_network_header(skb,
