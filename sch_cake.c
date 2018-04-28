@@ -982,7 +982,7 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 			continue;
 
 		tcph_check = (skb_check->encapsulation ? inner_tcp_hdr(skb_check) :
-			                                 tcp_hdr(skb_check));
+							 tcp_hdr(skb_check));
 
 		if (skb_check->protocol == cpu_to_be16(ETH_P_IP)) {
 			iph = skb->encapsulation ? inner_ip_hdr(skb) : ip_hdr(skb);
@@ -1201,26 +1201,26 @@ static inline u32 cake_overhead(struct cake_sched_data *q, struct sk_buff *skb)
 
 		hdr_len = skb_transport_header(skb) - skb_mac_header(skb);
 
-                /* + transport layer */
-                if (likely(shinfo->gso_type & (SKB_GSO_TCPV4 | SKB_GSO_TCPV6))) {
-                        const struct tcphdr *th;
-                        struct tcphdr _tcphdr;
+		/* + transport layer */
+		if (likely(shinfo->gso_type & (SKB_GSO_TCPV4 | SKB_GSO_TCPV6))) {
+			const struct tcphdr *th;
+			struct tcphdr _tcphdr;
 
-                        th = skb_header_pointer(skb, skb_transport_offset(skb),
-                                                sizeof(_tcphdr), &_tcphdr);
-                        if (likely(th))
-                                hdr_len += __tcp_hdrlen(th);
-                } else {
-                        struct udphdr _udphdr;
+			th = skb_header_pointer(skb, skb_transport_offset(skb),
+						sizeof(_tcphdr), &_tcphdr);
+			if (likely(th))
+				hdr_len += __tcp_hdrlen(th);
+		} else {
+			struct udphdr _udphdr;
 
-                        if (skb_header_pointer(skb, skb_transport_offset(skb),
-                                               sizeof(_udphdr), &_udphdr))
-                                hdr_len += sizeof(struct udphdr);
-                }
+			if (skb_header_pointer(skb, skb_transport_offset(skb),
+					       sizeof(_udphdr), &_udphdr))
+				hdr_len += sizeof(struct udphdr);
+		}
 
 		if (shinfo->gso_type & SKB_GSO_DODGY)
 			segs = DIV_ROUND_UP(skb->len - hdr_len,
-                                                shinfo->gso_size);
+					    shinfo->gso_size);
 		else
 			segs = shinfo->gso_segs;
 
