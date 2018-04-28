@@ -913,7 +913,8 @@ static inline struct tcphdr *cake_get_tcphdr(struct sk_buff *skb)
 
 	th = skb->encapsulation ? inner_tcp_hdr(skb) : tcp_hdr(skb);
 
-	if (!pskb_may_pull(skb, ((unsigned char *)th - skb->data) + __tcp_hdrlen(th)))
+	if (!pskb_may_pull(skb, ((unsigned char *)th - skb->data) +
+				__tcp_hdrlen(th)))
 		return NULL;
 
 	return skb->encapsulation ? inner_tcp_hdr(skb) : tcp_hdr(skb);
@@ -981,28 +982,34 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 		    skb->protocol != skb_check->protocol)
 			continue;
 
-		tcph_check = (skb_check->encapsulation ? inner_tcp_hdr(skb_check) :
-							 tcp_hdr(skb_check));
+		tcph_check = (skb_check->encapsulation ?
+				inner_tcp_hdr(skb_check) :
+				tcp_hdr(skb_check));
 
 		if (skb_check->protocol == cpu_to_be16(ETH_P_IP)) {
-			iph = skb->encapsulation ? inner_ip_hdr(skb) : ip_hdr(skb);
+			iph = skb->encapsulation ? inner_ip_hdr(skb) :
+						   ip_hdr(skb);
 			iph_check = (skb_check->encapsulation ?
 				     inner_ip_hdr(skb_check) :
 				     ip_hdr(skb_check));
 
-			seglen = ntohs(iph_check->tot_len) - (4 * iph_check->ihl);
+			seglen = ntohs(iph_check->tot_len) -
+				 (4 * iph_check->ihl);
 
 			thisconn = (iph_check->saddr == iph->saddr &&
 				    iph_check->daddr == iph->daddr);
 		} else if (skb_check->protocol == cpu_to_be16(ETH_P_IPV6)) {
-			ipv6h = skb->encapsulation ? inner_ipv6_hdr(skb) : ipv6_hdr(skb);
+			ipv6h = skb->encapsulation ? inner_ipv6_hdr(skb) :
+						     ipv6_hdr(skb);
 			ipv6h_check = (skb_check->encapsulation ?
 				       inner_ipv6_hdr(skb_check) :
 				       ipv6_hdr(skb_check));
 			seglen = ntohs(ipv6h_check->payload_len);
 
-			thisconn = (ipv6_addr_cmp(&ipv6h_check->saddr, &ipv6h->saddr) &&
-				    ipv6_addr_cmp(&ipv6h_check->daddr, &ipv6h->daddr));
+			thisconn = (ipv6_addr_cmp(&ipv6h_check->saddr,
+						  &ipv6h->saddr) &&
+				    ipv6_addr_cmp(&ipv6h_check->daddr,
+						  &ipv6h->daddr));
 		} else {
 			WARN_ON(1);  /* shouldn't happen */
 			continue;
@@ -1042,7 +1049,8 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 		/* new ack sequence must be greater
 		 */
 		if (thisconn &&
-		    ((int32_t)(ntohl(tcph_check->ack_seq) - ntohl(tcph->ack_seq)) > 0))
+		    ((int32_t)(ntohl(tcph_check->ack_seq) -
+			       ntohl(tcph->ack_seq)) > 0))
 			continue;
 
 		/* DupACKs with an equal sequence number shouldn't be filtered,
@@ -1202,7 +1210,8 @@ static inline u32 cake_overhead(struct cake_sched_data *q, struct sk_buff *skb)
 		hdr_len = skb_transport_header(skb) - skb_mac_header(skb);
 
 		/* + transport layer */
-		if (likely(shinfo->gso_type & (SKB_GSO_TCPV4 | SKB_GSO_TCPV6))) {
+		if (likely(shinfo->gso_type &
+				(SKB_GSO_TCPV4 | SKB_GSO_TCPV6))) {
 			const struct tcphdr *th;
 			struct tcphdr _tcphdr;
 
@@ -1882,7 +1891,8 @@ retry:
 		/* Last packet in queue may be marked, shouldn't be dropped */
 		if (!cobalt_should_drop(&flow->cvars, &b->cparams, now, skb,
 					(b->bulk_flow_count *
-					 !!(q->rate_flags & CAKE_FLAG_INGRESS))) ||
+					 !!(q->rate_flags &
+						 CAKE_FLAG_INGRESS))) ||
 		    !flow->head)
 			break;
 
@@ -2518,7 +2528,8 @@ static int cake_dump(struct Qdisc *sch, struct sk_buff *skb)
 			!!(q->flow_mode & CAKE_FLOW_NAT_FLAG)))
 		goto nla_put_failure;
 
-	if (nla_put_u32(skb, TCA_CAKE_SPLIT_GSO, !!(q->rate_flags & CAKE_FLAG_SPLIT_GSO)))
+	if (nla_put_u32(skb, TCA_CAKE_SPLIT_GSO,
+			!!(q->rate_flags & CAKE_FLAG_SPLIT_GSO)))
 		goto nla_put_failure;
 
 	if (nla_put_u32(skb, TCA_CAKE_WASH,
@@ -2572,7 +2583,7 @@ static int cake_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 		return -1;
 
 #define PUT_STAT_U32(attr, data) do {				       \
-		if(nla_put_u32(d->skb, TCA_CAKE_STATS_ ## attr, data)) \
+		if (nla_put_u32(d->skb, TCA_CAKE_STATS_ ## attr, data)) \
 			goto nla_put_failure;			       \
 	} while (0);
 
@@ -2592,11 +2603,11 @@ static int cake_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 		goto nla_put_failure;
 
 #define PUT_TSTAT_U32(attr, data) do {					\
-		if(nla_put_u32(d->skb, TCA_CAKE_TIN_STATS_ ## attr, data)) \
+		if (nla_put_u32(d->skb, TCA_CAKE_TIN_STATS_ ## attr, data)) \
 			goto nla_put_failure;				\
 	} while (0);
 #define PUT_TSTAT_U64(attr, data) do {					\
-		if(nla_put_u64_64bit(d->skb, TCA_CAKE_TIN_STATS_ ## attr, \
+		if (nla_put_u64_64bit(d->skb, TCA_CAKE_TIN_STATS_ ## attr, \
 					data, TCA_CAKE_TIN_STATS_PAD))	\
 			goto nla_put_failure;				\
 	} while (0);
@@ -2610,7 +2621,8 @@ static int cake_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 
 		PUT_TSTAT_U32(THRESHOLD_RATE, b->tin_rate_bps);
 		PUT_TSTAT_U32(TARGET_US, cobalt_time_to_us(b->cparams.target));
-		PUT_TSTAT_U32(INTERVAL_US, cobalt_time_to_us(b->cparams.interval));
+		PUT_TSTAT_U32(INTERVAL_US,
+				cobalt_time_to_us(b->cparams.interval));
 
 		PUT_TSTAT_U32(SENT_PACKETS, b->packets);
 		PUT_TSTAT_U64(SENT_BYTES64, b->bytes);
