@@ -859,41 +859,30 @@ static inline struct tcphdr *cake_get_tcphdr(struct sk_buff *skb)
 	struct iphdr *iph;
 	struct tcphdr *th;
 
+	/* check IPv6 header size immediately, since for IPv4 we need the space
+	 * for the TCP header anyway
+	 */
+	if (!pskb_may_pull(skb,
+			   (skb->encapsulation ?
+				   skb_inner_network_offset(skb) :
+				   skb_network_offset(skb)) +
+				sizeof(struct ipv6hdr)))
+		return NULL;
 
-	switch (skb->protocol) {
-	case cpu_to_be16(ETH_P_IP):
-		if (!pskb_may_pull(skb,
-				   (skb->encapsulation ?
-					   skb_inner_network_offset(skb) :
-					   skb_network_offset(skb)) +
-				    sizeof(struct iphdr)))
-			return NULL;
+	iph = skb->encapsulation ? inner_ip_hdr(skb) : ip_hdr(skb);
 
-		iph = skb->encapsulation ? inner_ip_hdr(skb) : ip_hdr(skb);
-
+	if (iph->version == 4) {
 		if (iph->protocol != IPPROTO_TCP)
 			return NULL;
 
-		break;
-
-	case cpu_to_be16(ETH_P_IPV6):
-		if (!pskb_may_pull(skb,
-				   (skb->encapsulation ?
-					   skb_inner_network_offset(skb) :
-					   skb_network_offset(skb)) +
-				    sizeof(struct ipv6hdr)))
-			return NULL;
-
-		ipv6h = inner_ipv6_hdr(skb);
+	} else if (iph->version == 6) {
+		ipv6h = (struct ipv6hdr *)iph;
 
 		if (ipv6h->nexthdr != IPPROTO_TCP)
 			return NULL;
 
-		break;
-
-	default:
+	} else
 		return NULL;
-	}
 
 	if (!pskb_may_pull(skb,
 			   (skb->encapsulation ?
@@ -908,7 +897,6 @@ static inline struct tcphdr *cake_get_tcphdr(struct sk_buff *skb)
 		return NULL;
 
 	return skb->encapsulation ? inner_tcp_hdr(skb) : tcp_hdr(skb);
-
 }
 
 static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
