@@ -866,58 +866,77 @@ static inline struct tcphdr *cake_get_tcphdr(struct sk_buff *skb)
 {
 	struct ipv6hdr *ipv6h;
 	struct iphdr *iph;
-	struct tcphdr *th;
 
+	/* check IPv6 header size immediately, since for IPv4 we need the space
+	 * for the TCP header anyway
+	 */
+	if (!pskb_may_pull(skb, skb_network_offset(skb) +
+				sizeof(struct ipv6hdr)))
+		return NULL;
 
-	switch (skb->protocol) {
-	case cpu_to_be16(ETH_P_IP):
-		if (!pskb_may_pull(skb,
-				   (skb->encapsulation ?
-					   skb_inner_network_offset(skb) :
-					   skb_network_offset(skb)) +
-				    sizeof(struct iphdr)))
+	iph = ip_hdr(skb);
+
+	if (iph->version == 4) {
+		/* special-case 6in4 tunnelling, as that is a common way to get
+		 * v6 connectivity in the home
+		 */
+		if (iph->protocol == IPPROTO_IPV6) {
+			if (!pskb_may_pull(skb, (skb_network_offset(skb) +
+						 ip_hdrlen(skb) +
+						 sizeof(struct ipv6hdr))))
+				return NULL;
+
+			ipv6h = (struct ipv6hdr *)(skb_network_header(skb) +
+						   ip_hdrlen(skb));
+
+			if (ipv6h->nexthdr != IPPROTO_TCP)
+				return NULL;
+
+			skb_set_inner_network_header(skb,
+						skb_network_offset(skb) +
+						ip_hdrlen(skb));
+			skb_set_inner_transport_header(skb,
+						skb_inner_network_offset(skb) +
+						sizeof(struct ipv6hdr));
+
+		} else if (iph->protocol == IPPROTO_TCP) {
+			/* we always set the inner headers so we can use those
+			 * unconditionally in the filtering logic
+			 */
+			skb_set_inner_network_header(skb,
+						skb_network_offset(skb));
+			skb_set_inner_transport_header(skb,
+						skb_network_offset(skb) +
+						ip_hdrlen(skb));
+		} else
 			return NULL;
 
-		iph = skb->encapsulation ? inner_ip_hdr(skb) : ip_hdr(skb);
 
-		if (iph->protocol != IPPROTO_TCP)
-			return NULL;
-
-		break;
-
-	case cpu_to_be16(ETH_P_IPV6):
-		if (!pskb_may_pull(skb,
-				   (skb->encapsulation ?
-					   skb_inner_network_offset(skb) :
-					   skb_network_offset(skb)) +
-				    sizeof(struct ipv6hdr)))
-			return NULL;
-
-		ipv6h = inner_ipv6_hdr(skb);
+	} else if (iph->version == 6) {
+		ipv6h = (struct ipv6hdr *)iph;
 
 		if (ipv6h->nexthdr != IPPROTO_TCP)
 			return NULL;
 
-		break;
+		/* we always set the inner headers so we can use those
+		 * unconditionally in the filtering logic
+		 */
+		skb_set_inner_network_header(skb,
+					     skb_network_offset(skb));
+		skb_set_inner_transport_header(skb,
+					       skb_network_offset(skb) +
+					       sizeof(struct ipv6hdr));
 
-	default:
-		return NULL;
-	}
-
-	if (!pskb_may_pull(skb,
-			   (skb->encapsulation ?
-				   skb_inner_transport_offset(skb) :
-				   skb_transport_offset(skb)) +
-			    sizeof(struct tcphdr)))
-		return NULL;
-
-	th = skb->encapsulation ? inner_tcp_hdr(skb) : tcp_hdr(skb);
-
-	if (!pskb_may_pull(skb, ((unsigned char *)th - skb->data) + __tcp_hdrlen(th)))
+	} else
 		return NULL;
 
-	return skb->encapsulation ? inner_tcp_hdr(skb) : tcp_hdr(skb);
+	if (!pskb_may_pull(skb, skb_inner_transport_offset(skb) +
+				sizeof(struct tcphdr)) ||
+	    !pskb_may_pull(skb, skb_inner_transport_offset(skb) +
+		                inner_tcp_hdrlen(skb)))
+		return NULL;
 
+	return inner_tcp_hdr(skb);
 }
 
 static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
@@ -977,32 +996,29 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 		}
 
 		if (skb_is_gso(skb_check) ||
-		    !get_cobalt_cb(skb_check)->ack_filter_eligible ||
-		    skb->protocol != skb_check->protocol)
+		    !get_cobalt_cb(skb_check)->ack_filter_eligible)
 			continue;
 
-		tcph_check = (skb_check->encapsulation ? inner_tcp_hdr(skb_check) :
-			                                 tcp_hdr(skb_check));
 
-		if (skb_check->protocol == cpu_to_be16(ETH_P_IP)) {
-			iph = skb->encapsulation ? inner_ip_hdr(skb) : ip_hdr(skb);
-			iph_check = (skb_check->encapsulation ?
-				     inner_ip_hdr(skb_check) :
-				     ip_hdr(skb_check));
+		iph = inner_ip_hdr(skb);
+		iph_check = inner_ip_hdr(skb_check);
+		tcph_check = inner_tcp_hdr(skb_check);
 
+		if (iph->version != iph_check->version)
+			continue;
+
+		if (iph->version == 4) {
 			seglen = ntohs(iph_check->tot_len) - (4 * iph_check->ihl);
 
 			thisconn = (iph_check->saddr == iph->saddr &&
 				    iph_check->daddr == iph->daddr);
-		} else if (skb_check->protocol == cpu_to_be16(ETH_P_IPV6)) {
-			ipv6h = skb->encapsulation ? inner_ipv6_hdr(skb) : ipv6_hdr(skb);
-			ipv6h_check = (skb_check->encapsulation ?
-				       inner_ipv6_hdr(skb_check) :
-				       ipv6_hdr(skb_check));
+		} else if (iph->version == 6) {
+			ipv6h = (struct ipv6hdr *)iph;
+			ipv6h_check = (struct ipv6hdr *)iph_check;
 			seglen = ntohs(ipv6h_check->payload_len);
 
-			thisconn = (ipv6_addr_cmp(&ipv6h_check->saddr, &ipv6h->saddr) &&
-				    ipv6_addr_cmp(&ipv6h_check->daddr, &ipv6h->daddr));
+			thisconn = (!ipv6_addr_cmp(&ipv6h_check->saddr, &ipv6h->saddr) &&
+				    !ipv6_addr_cmp(&ipv6h_check->daddr, &ipv6h->daddr));
 		} else {
 			WARN_ON(1);  /* shouldn't happen */
 			continue;
@@ -1218,7 +1234,7 @@ static inline u32 cake_overhead(struct cake_sched_data *q, struct sk_buff *skb)
                                 hdr_len += sizeof(struct udphdr);
                 }
 
-		if (shinfo->gso_type & SKB_GSO_DODGY)
+		if (unlikely(shinfo->gso_type & SKB_GSO_DODGY))
 			segs = DIV_ROUND_UP(skb->len - hdr_len,
                                                 shinfo->gso_size);
 		else
@@ -1537,6 +1553,7 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 			cobalt_set_enqueue_time(segs, now);
 			get_cobalt_cb(segs)->adjusted_len = cake_overhead(q,
 									  segs);
+			get_cobalt_cb(segs)->ack_filter_eligible = 0;
 			flow_queue_add(flow, segs);
 
 			sch->q.qlen++;
