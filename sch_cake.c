@@ -864,10 +864,9 @@ static inline struct iphdr *cake_get_iphdr(const struct sk_buff *skb,
 					void *buf)
 {
 	unsigned int offset = skb_network_offset(skb);
-	const struct iphdr *iph;
-	struct iphdr _iph;
+	struct iphdr *iph;
 
-	iph = skb_header_pointer(skb, offset, sizeof(_iph), &_iph);
+	iph = skb_header_pointer(skb, offset, sizeof(struct iphdr), buf);
 
 	if (!iph)
 		return NULL;
@@ -877,7 +876,7 @@ static inline struct iphdr *cake_get_iphdr(const struct sk_buff *skb,
 					  sizeof(struct ipv6hdr), buf);
 
 	else if (iph->version == 4)
-		return skb_header_pointer(skb, offset, iph->ihl * 4, buf);
+		return iph;
 
 	else if (iph->version == 6)
 		return skb_header_pointer(skb, offset, sizeof(struct ipv6hdr),
