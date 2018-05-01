@@ -853,116 +853,117 @@ flow_queue_add(struct cake_flow *flow, struct sk_buff *skb)
 	skb->next = NULL;
 }
 
-static inline struct tcphdr *cake_get_tcphdr(struct sk_buff *skb)
+static inline struct iphdr *cake_get_iphdr(const struct sk_buff *skb,
+					void *buf)
 {
-	struct ipv6hdr *ipv6h;
-	struct iphdr *iph;
+	unsigned int offset = skb_network_offset(skb);
+	const struct iphdr *iph;
+	struct iphdr _iph;
 
-	/* check IPv6 header size immediately, since for IPv4 we need the space
-	 * for the TCP header anyway
-	 */
-	if (!pskb_may_pull(skb, skb_network_offset(skb) +
-				sizeof(struct ipv6hdr)))
+	iph = skb_header_pointer(skb, offset, sizeof(_iph), &_iph);
+
+	if (!iph)
 		return NULL;
 
-	iph = ip_hdr(skb);
+	if (iph->version == 4 && iph->protocol == IPPROTO_IPV6)
+		return skb_header_pointer(skb, offset + iph->ihl * 4,
+					  sizeof(struct ipv6hdr), buf);
 
-	if (iph->version == 4) {
+	else if (iph->version == 4)
+		return skb_header_pointer(skb, offset, iph->ihl * 4, buf);
+
+	else if (iph->version == 6)
+		return skb_header_pointer(skb, offset, sizeof(struct ipv6hdr),
+					  buf);
+
+	return NULL;
+}
+
+static inline struct tcphdr *cake_get_tcphdr(const struct sk_buff *skb,
+					    void *buf)
+{
+	unsigned int offset = skb_network_offset(skb);
+	const struct ipv6hdr *ipv6h;
+	const struct tcphdr *tcph;
+	const struct iphdr *iph;
+	struct ipv6hdr _ipv6h;
+	struct tcphdr _tcph;
+
+	ipv6h = skb_header_pointer(skb, offset, sizeof(_ipv6h), &_ipv6h);
+
+	if (!ipv6h)
+		return NULL;
+
+	if (ipv6h->version == 4) {
+		iph = (struct iphdr *)ipv6h;
+		offset += iph->ihl * 4;
+
 		/* special-case 6in4 tunnelling, as that is a common way to get
 		 * v6 connectivity in the home
 		 */
 		if (iph->protocol == IPPROTO_IPV6) {
-			if (!pskb_may_pull(skb, (skb_network_offset(skb) +
-						 ip_hdrlen(skb) +
-						 sizeof(struct ipv6hdr))))
+			ipv6h = skb_header_pointer(skb, offset,
+						   sizeof(_ipv6h), &_ipv6h);
+
+			if (!ipv6h || ipv6h->nexthdr != IPPROTO_TCP)
 				return NULL;
 
-			ipv6h = (struct ipv6hdr *)(skb_network_header(skb) +
-						   ip_hdrlen(skb));
+			offset += sizeof(struct ipv6hdr);
 
-			if (ipv6h->nexthdr != IPPROTO_TCP)
-				return NULL;
-
-			skb_set_inner_network_header(skb,
-						     skb_network_offset(skb) +
-						     ip_hdrlen(skb));
-			skb_set_inner_transport_header(skb,
-						skb_inner_network_offset(skb) +
-						sizeof(struct ipv6hdr));
-
-		} else if (iph->protocol == IPPROTO_TCP) {
-			/* we always set the inner headers so we can use those
-			 * unconditionally in the filtering logic
-			 */
-			skb_set_inner_network_header(skb,
-						     skb_network_offset(skb));
-			skb_set_inner_transport_header(skb,
-						       skb_network_offset(skb) +
-						       ip_hdrlen(skb));
-		} else {
+		} else if (iph->protocol != IPPROTO_TCP) {
 			return NULL;
 		}
 
-	} else if (iph->version == 6) {
-		ipv6h = (struct ipv6hdr *)iph;
-
+	} else if (ipv6h->version == 6) {
 		if (ipv6h->nexthdr != IPPROTO_TCP)
 			return NULL;
 
-		/* we always set the inner headers so we can use those
-		 * unconditionally in the filtering logic
-		 */
-		skb_set_inner_network_header(skb,
-					     skb_network_offset(skb));
-		skb_set_inner_transport_header(skb,
-					       skb_network_offset(skb) +
-					       sizeof(struct ipv6hdr));
-
+		offset += sizeof(struct ipv6hdr);
 	} else {
 		return NULL;
 	}
 
-	if (!pskb_may_pull(skb, skb_inner_transport_offset(skb) +
-				sizeof(struct tcphdr)) ||
-	    !pskb_may_pull(skb, skb_inner_transport_offset(skb) +
-				inner_tcp_hdrlen(skb)))
+	tcph = skb_header_pointer(skb, offset, sizeof(_tcph), &_tcph);
+	if (!tcph)
 		return NULL;
 
-	return inner_tcp_hdr(skb);
+	return skb_header_pointer(skb, offset, __tcp_hdrlen(tcph), buf);
 }
 
 static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 				       struct cake_flow *flow)
 {
-	int seglen;
-	struct sk_buff *skb = flow->tail, *skb_check, *skb_check_prev;
-	struct iphdr *iph, *iph_check;
-	struct ipv6hdr *ipv6h, *ipv6h_check;
-	struct tcphdr *tcph, *tcph_check;
-	bool otherconn_ack_seen = false;
-	struct sk_buff *otherconn_checked_to = NULL;
 	bool thisconn_redundant_seen = false, thisconn_seen_last = false;
-	struct sk_buff *thisconn_checked_to = NULL, *thisconn_ack = NULL;
 	bool aggressive = q->ack_filter == CAKE_ACK_AGGRESSIVE;
+	bool otherconn_ack_seen = false;
+	struct sk_buff *skb_check, *skb_check_prev;
+	struct sk_buff *otherconn_checked_to = NULL;
+	struct sk_buff *thisconn_checked_to = NULL;
+	struct sk_buff *thisconn_ack = NULL;
+	const struct ipv6hdr *ipv6h, *ipv6h_check;
+	const struct tcphdr *tcph, *tcph_check;
+	const struct iphdr *iph, *iph_check;
+	const struct sk_buff *skb;
+	struct ipv6hdr _iph, _iph_check;
+	struct tcphdr _tcph_check;
+	unsigned char _tcph[64]; /* need to hold maximum hdr size */
+	int seglen;
 
-	tcph = cake_get_tcphdr(skb);
+	/* no other possible ACKs to filter */
+	if (flow->head == flow->tail)
+		return NULL;
+
+	skb = flow->tail;
+	tcph = cake_get_tcphdr(skb, _tcph);
+	iph = cake_get_iphdr(skb, &_iph);
 	if (!tcph)
-		goto out_fail;
+		return NULL;
 
 	/* the 'triggering' packet need only have the ACK flag set.
 	 * also check that SYN is not set, as there won't be any previous ACKs.
 	 */
 	if ((tcp_flag_word(tcph) &
 	     (TCP_FLAG_ACK | TCP_FLAG_SYN)) != TCP_FLAG_ACK)
-		goto out_fail;
-
-	/* set flag so we don't have to redo all the checks when encountering
-	 * packet for filtering below
-	 */
-	get_cobalt_cb(skb)->ack_filter_eligible = 1;
-
-	/* no other possible ACKs to filter */
-	if (flow->head == skb)
 		return NULL;
 
 	/* the 'triggering' ACK is at the end of the queue,
@@ -987,13 +988,11 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 			skb_check_prev = ERR_PTR(-1);
 		}
 
-		if (skb_is_gso(skb_check) ||
-		    !get_cobalt_cb(skb_check)->ack_filter_eligible)
+		if (skb_is_gso(skb_check))
 			continue;
 
-		iph = inner_ip_hdr(skb);
-		iph_check = inner_ip_hdr(skb_check);
-		tcph_check = inner_tcp_hdr(skb_check);
+		iph_check = cake_get_iphdr(skb_check, &_iph_check);
+		tcph_check = cake_get_tcphdr(skb_check, &_tcph_check);
 
 		if (iph->version != iph_check->version)
 			continue;
@@ -1184,10 +1183,6 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 		flow->ackcheck = NULL;
 
 	return skb_check;
-
-out_fail:
-	get_cobalt_cb(skb)->ack_filter_eligible = 0;
-	return NULL;
 }
 
 static inline cobalt_time_t cake_ewma(cobalt_time_t avg, cobalt_time_t sample,
@@ -1566,7 +1561,6 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 			qdisc_skb_cb(segs)->pkt_len = segs->len;
 			cobalt_set_enqueue_time(segs, now);
 			get_cobalt_cb(segs)->adjusted_len = cake_overhead(q, segs);
-			get_cobalt_cb(segs)->ack_filter_eligible = 0;
 			flow_queue_add(flow, segs);
 
 			sch->q.qlen++;
