@@ -50,6 +50,4 @@ static inline void qdisc_qstats_drop(struct Qdisc *sch)
 	sch->qstats.drops++;
 }
 
-#define codel_stats_copy_queue(a, b, c, d) gnet_stats_copy_queue(a, c)
-#define codel_watchdog_schedule_ns(a, b, c) qdisc_watchdog_schedule_ns(a, b)
 #endif
