@@ -79,6 +79,7 @@
 #define CAKE_SET_WAYS (8)
 #define CAKE_MAX_TINS (8)
 #define CAKE_QUEUES (1024)
+#define	CAKE_FLOW_NAT_FLAG 64
 #define CAKE_SPLIT_GSO_THRESHOLD (125000000) /* 1Gbps */
 #define US2TIME(a) (a * (u64)NSEC_PER_USEC)
 
@@ -211,7 +212,6 @@ struct cake_sched_data {
 
 	u16		tin_cnt;
 	u8		tin_mode;
-#define	CAKE_FLOW_NAT_FLAG 64
 	u8		flow_mode;
 	u8		ack_filter;
 	u8		atm_mode;
