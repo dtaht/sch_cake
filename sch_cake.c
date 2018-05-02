@@ -79,7 +79,8 @@
 #define CAKE_SET_WAYS (8)
 #define CAKE_MAX_TINS (8)
 #define CAKE_QUEUES (1024)
-#define	CAKE_FLOW_NAT_FLAG 64
+#define CAKE_FLOW_MASK 63
+#define CAKE_FLOW_NAT_FLAG 64
 #define CAKE_SPLIT_GSO_THRESHOLD (125000000) /* 1Gbps */
 #define US2TIME(a) (a * (u64)NSEC_PER_USEC)
 
@@ -2341,7 +2342,8 @@ static int cake_change(struct Qdisc *sch, struct nlattr *opt,
 	}
 
 	if (tb[TCA_CAKE_FLOW_MODE])
-		q->flow_mode = nla_get_u32(tb[TCA_CAKE_FLOW_MODE]);
+		q->flow_mode = (nla_get_u32(tb[TCA_CAKE_FLOW_MODE]) &
+				CAKE_FLOW_MASK);
 
 	if (tb[TCA_CAKE_NAT]) {
 		q->flow_mode &= ~CAKE_FLOW_NAT_FLAG;
@@ -2526,7 +2528,7 @@ static int cake_dump(struct Qdisc *sch, struct sk_buff *skb)
 		goto nla_put_failure;
 
 	if (nla_put_u32(skb, TCA_CAKE_FLOW_MODE,
-			q->flow_mode & ~CAKE_FLOW_NAT_FLAG))
+			q->flow_mode & CAKE_FLOW_MASK))
 		goto nla_put_failure;
 
 	if (nla_put_u32(skb, TCA_CAKE_NAT,
