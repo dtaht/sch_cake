@@ -854,7 +854,7 @@ flow_queue_add(struct cake_flow *flow, struct sk_buff *skb)
 }
 
 static inline struct iphdr *cake_get_iphdr(const struct sk_buff *skb,
-					void *buf)
+					   struct ipv6hdr *buf)
 {
 	unsigned int offset = skb_network_offset(skb);
 	struct iphdr *iph;
@@ -879,7 +879,7 @@ static inline struct iphdr *cake_get_iphdr(const struct sk_buff *skb,
 }
 
 static inline struct tcphdr *cake_get_tcphdr(const struct sk_buff *skb,
-					    void *buf)
+					     void *buf, unsigned int bufsize)
 {
 	unsigned int offset = skb_network_offset(skb);
 	const struct ipv6hdr *ipv6h;
@@ -926,7 +926,8 @@ static inline struct tcphdr *cake_get_tcphdr(const struct sk_buff *skb,
 	if (!tcph)
 		return NULL;
 
-	return skb_header_pointer(skb, offset, __tcp_hdrlen(tcph), buf);
+	return skb_header_pointer(skb, offset,
+				  min(__tcp_hdrlen(tcph), bufsize), buf);
 }
 
 static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
@@ -953,7 +954,7 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 		return NULL;
 
 	skb = flow->tail;
-	tcph = cake_get_tcphdr(skb, _tcph);
+	tcph = cake_get_tcphdr(skb, _tcph, sizeof(_tcph));
 	iph = cake_get_iphdr(skb, &_iph);
 	if (!tcph)
 		return NULL;
@@ -987,13 +988,11 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 			skb_check_prev = ERR_PTR(-1);
 		}
 
-		if (skb_is_gso(skb_check))
-			continue;
-
 		iph_check = cake_get_iphdr(skb_check, &_iph_check);
-		tcph_check = cake_get_tcphdr(skb_check, &_tcph_check);
+		tcph_check = cake_get_tcphdr(skb_check, &_tcph_check,
+					     sizeof(_tcph_check));
 
-		if (iph->version != iph_check->version)
+		if (!tcph_check || iph->version != iph_check->version)
 			continue;
 
 		if (iph->version == 4) {
@@ -1163,7 +1162,7 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 	else
 		flow->ackcheck = skb_check_prev;
 
-	/* if filtering, the pure ACK from the flow queue */
+	/* if filtering, remove the pure ACK from the flow queue */
 	if (thisconn_ack && (aggressive || thisconn_redundant_seen)) {
 		if (PTR_ERR(thisconn_ack) == -1) {
 			skb_check = flow->head;
