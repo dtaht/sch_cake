@@ -1557,6 +1557,7 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 			b->packets++;
 			segs = nskb;
 		}
+
 		/* stats */
 		b->bytes	    += slen;
 		b->backlogs[idx]    += slen;
@@ -1590,6 +1591,7 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 			sch->q.qlen++;
 			q->buffer_used      += skb->truesize;
 		}
+
 		/* stats */
 		b->packets++;
 		b->bytes	    += len;
@@ -1971,7 +1973,7 @@ static const struct nla_policy cake_policy[TCA_CAKE_MAX + 1] = {
 	[TCA_CAKE_AUTORATE]      = { .type = NLA_U32 },
 	[TCA_CAKE_MEMORY]	 = { .type = NLA_U32 },
 	[TCA_CAKE_NAT]		 = { .type = NLA_U32 },
-	[TCA_CAKE_RAW]       = { .type = NLA_U32 },
+	[TCA_CAKE_RAW]		 = { .type = NLA_U32 },
 	[TCA_CAKE_WASH]		 = { .type = NLA_U32 },
 	[TCA_CAKE_MPU]		 = { .type = NLA_U32 },
 	[TCA_CAKE_INGRESS]	 = { .type = NLA_U32 },
