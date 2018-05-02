@@ -1637,9 +1637,7 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 			q->avg_window_bytes = 0;
 			q->avg_window_begin = now;
 
-			if (q->rate_flags & CAKE_FLAG_AUTORATE_INGRESS &&
-			    now - q->last_reconfig_time >
-				(NSEC_PER_SEC / 4)) {
+			if (now - q->last_reconfig_time > (NSEC_PER_SEC / 4)) {
 				q->rate_bps = (q->avg_peak_bandwidth * 15) >> 4;
 				cake_reconfigure(sch);
 			}
