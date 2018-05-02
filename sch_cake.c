@@ -2331,9 +2331,6 @@ static int cake_change(struct Qdisc *sch, struct nlattr *opt,
 	if (tb[TCA_CAKE_DIFFSERV_MODE])
 		q->tin_mode = nla_get_u32(tb[TCA_CAKE_DIFFSERV_MODE]);
 
-	if (tb[TCA_CAKE_ATM])
-		q->atm_mode = nla_get_u32(tb[TCA_CAKE_ATM]);
-
 	if (tb[TCA_CAKE_WASH]) {
 		if (!!nla_get_u32(tb[TCA_CAKE_WASH]))
 			q->rate_flags |= CAKE_FLAG_WASH;
@@ -2350,6 +2347,9 @@ static int cake_change(struct Qdisc *sch, struct nlattr *opt,
 		q->flow_mode |= CAKE_FLOW_NAT_FLAG *
 			!!nla_get_u32(tb[TCA_CAKE_NAT]);
 	}
+
+	if (tb[TCA_CAKE_ATM])
+		q->atm_mode = nla_get_u32(tb[TCA_CAKE_ATM]);
 
 	if (tb[TCA_CAKE_OVERHEAD]) {
 		q->rate_overhead = nla_get_s32(tb[TCA_CAKE_OVERHEAD]);
