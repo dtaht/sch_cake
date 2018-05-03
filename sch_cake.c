@@ -592,8 +592,8 @@ static bool cobalt_should_drop(struct cobalt_vars *vars,
 
 #if IS_REACHABLE(CONFIG_NF_CONNTRACK)
 
-static inline void cake_update_flowkeys(struct flow_keys *keys,
-					const struct sk_buff *skb)
+static void cake_update_flowkeys(struct flow_keys *keys,
+				 const struct sk_buff *skb)
 {
 	enum ip_conntrack_info ctinfo;
 	bool rev = false;
@@ -638,8 +638,8 @@ static inline void cake_update_flowkeys(struct flow_keys *keys,
 		nf_ct_put(ct);
 }
 #else
-static inline void cake_update_flowkeys(struct flow_keys *keys,
-					const struct sk_buff *skb)
+static void cake_update_flowkeys(struct flow_keys *keys,
+				 const struct sk_buff *skb)
 {
 	/* There is nothing we can do here without CONNTRACK */
 }
@@ -649,18 +649,18 @@ static inline void cake_update_flowkeys(struct flow_keys *keys,
  *  would be matching triple isolate mode as well.
  */
 
-static inline bool cake_dsrc(int flow_mode)
+static bool cake_dsrc(int flow_mode)
 {
 	return (flow_mode & CAKE_FLOW_DUAL_SRC) == CAKE_FLOW_DUAL_SRC;
 }
 
-static inline bool cake_ddst(int flow_mode)
+static bool cake_ddst(int flow_mode)
 {
 	return (flow_mode & CAKE_FLOW_DUAL_DST) == CAKE_FLOW_DUAL_DST;
 }
 
-static inline u32
-cake_hash(struct cake_tin_data *q, const struct sk_buff *skb, int flow_mode)
+static u32 cake_hash(struct cake_tin_data *q, const struct sk_buff *skb,
+		     int flow_mode)
 {
 	struct flow_keys keys, host_keys;
 	u32 flow_hash = 0, srchost_hash, dsthost_hash;
@@ -833,7 +833,7 @@ found_dst:
 /* helper functions : might be changed when/if skb use a standard list_head */
 /* remove one skb from head of slot queue */
 
-static inline struct sk_buff *dequeue_head(struct cake_flow *flow)
+static struct sk_buff *dequeue_head(struct cake_flow *flow)
 {
 	struct sk_buff *skb = flow->head;
 
@@ -850,8 +850,7 @@ static inline struct sk_buff *dequeue_head(struct cake_flow *flow)
 
 /* add skb to flow queue (tail add) */
 
-static inline void
-flow_queue_add(struct cake_flow *flow, struct sk_buff *skb)
+static void flow_queue_add(struct cake_flow *flow, struct sk_buff *skb)
 {
 	if (!flow->head)
 		flow->head = skb;
@@ -861,8 +860,8 @@ flow_queue_add(struct cake_flow *flow, struct sk_buff *skb)
 	skb->next = NULL;
 }
 
-static inline struct iphdr *cake_get_iphdr(const struct sk_buff *skb,
-					   struct ipv6hdr *buf)
+static struct iphdr *cake_get_iphdr(const struct sk_buff *skb,
+				    struct ipv6hdr *buf)
 {
 	unsigned int offset = skb_network_offset(skb);
 	struct iphdr *iph;
@@ -886,8 +885,8 @@ static inline struct iphdr *cake_get_iphdr(const struct sk_buff *skb,
 	return NULL;
 }
 
-static inline struct tcphdr *cake_get_tcphdr(const struct sk_buff *skb,
-					     void *buf, unsigned int bufsize)
+static struct tcphdr *cake_get_tcphdr(const struct sk_buff *skb,
+				      void *buf, unsigned int bufsize)
 {
 	unsigned int offset = skb_network_offset(skb);
 	const struct ipv6hdr *ipv6h;
@@ -1191,15 +1190,15 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 	return skb_check;
 }
 
-static inline cobalt_time_t cake_ewma(cobalt_time_t avg, cobalt_time_t sample,
-				      u32 shift)
+static cobalt_time_t cake_ewma(cobalt_time_t avg, cobalt_time_t sample,
+			       u32 shift)
 {
 	avg -= avg >> shift;
 	avg += sample >> shift;
 	return avg;
 }
 
-static inline u32 cake_overhead(struct cake_sched_data *q, struct sk_buff *skb)
+static u32 cake_overhead(struct cake_sched_data *q, struct sk_buff *skb)
 {
 	const struct skb_shared_info *shinfo = skb_shinfo(skb);
 	u32 off = skb_network_offset(skb);
@@ -1280,7 +1279,7 @@ static inline u32 cake_overhead(struct cake_sched_data *q, struct sk_buff *skb)
 	return len;
 }
 
-static inline void cake_heap_swap(struct cake_sched_data *q, u16 i, u16 j)
+static void cake_heap_swap(struct cake_sched_data *q, u16 i, u16 j)
 {
 	struct cake_heap_entry ii = q->overflow_heap[i];
 	struct cake_heap_entry jj = q->overflow_heap[j];
@@ -1292,7 +1291,7 @@ static inline void cake_heap_swap(struct cake_sched_data *q, u16 i, u16 j)
 	q->tins[jj.t].overflow_idx[jj.b] = i;
 }
 
-static inline u32 cake_heap_get_backlog(const struct cake_sched_data *q, u16 i)
+static u32 cake_heap_get_backlog(const struct cake_sched_data *q, u16 i)
 {
 	struct cake_heap_entry ii = q->overflow_heap[i];
 
@@ -1436,7 +1435,7 @@ static unsigned int cake_drop(struct Qdisc *sch, struct sk_buff **to_free)
 	return idx + (tin << 16);
 }
 
-static inline void cake_wash_diffserv(struct sk_buff *skb)
+static void cake_wash_diffserv(struct sk_buff *skb)
 {
 	switch (skb->protocol) {
 	case htons(ETH_P_IP):
@@ -1450,7 +1449,7 @@ static inline void cake_wash_diffserv(struct sk_buff *skb)
 	};
 }
 
-static inline u8 cake_handle_diffserv(struct sk_buff *skb, u16 wash)
+static u8 cake_handle_diffserv(struct sk_buff *skb, u16 wash)
 {
 	u8 dscp;
 
