@@ -2330,20 +2330,12 @@ static int cake_change(struct Qdisc *sch, struct nlattr *opt,
 	return 0;
 }
 
-static void cake_free(void *addr)
-{
-	if (addr)
-		kvfree(addr);
-}
-
 static void cake_destroy(struct Qdisc *sch)
 {
 	struct cake_sched_data *q = qdisc_priv(sch);
 
 	qdisc_watchdog_cancel(&q->watchdog);
-
-	if (q->tins)
-		cake_free(q->tins);
+	kvfree(q->tins);
 }
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 16, 0)
