@@ -81,10 +81,6 @@
 #include <net/netfilter/nf_conntrack.h>
 #endif
 
-#if (KERNEL_VERSION(4, 4, 11) > LINUX_VERSION_CODE) || ((KERNEL_VERSION(4, 5, 0) <= LINUX_VERSION_CODE) && (KERNEL_VERSION(4, 5, 5) > LINUX_VERSION_CODE))
-#define qdisc_tree_reduce_backlog(_a, _b, _c) qdisc_tree_decrease_qlen(_a, _b)
-#endif
-
 #define CAKE_SET_WAYS (8)
 #define CAKE_MAX_TINS (8)
 #define CAKE_QUEUES (1024)
@@ -1424,11 +1420,7 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 				u64 next = min(q->time_next_packet,
 					       q->failsafe_next_packet);
 				sch->qstats.overlimits++;
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 8, 0)
-				codel_watchdog_schedule_ns(&q->watchdog, next, true);
-#else
 				qdisc_watchdog_schedule_ns(&q->watchdog, next);
-#endif
 			}
 		}
 	}
@@ -1652,11 +1644,7 @@ begin:
 	if (q->time_next_packet > now && q->failsafe_next_packet > now) {
 		u64 next = min(q->time_next_packet, q->failsafe_next_packet);
 		sch->qstats.overlimits++;
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 8, 0)
-		codel_watchdog_schedule_ns(&q->watchdog, next, true);
-#else
 		qdisc_watchdog_schedule_ns(&q->watchdog, next);
-#endif
 		return NULL;
 	}
 
@@ -1845,23 +1833,14 @@ retry:
 
 	if (q->time_next_packet > now && sch->q.qlen) {
 		u64 next = min(q->time_next_packet, q->failsafe_next_packet);
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 8, 0)
-		codel_watchdog_schedule_ns(&q->watchdog, next, true);
-#else
 		qdisc_watchdog_schedule_ns(&q->watchdog, next);
-#endif
 	} else if (!sch->q.qlen) {
 		int i;
 
 		for (i = 0; i < q->tin_cnt; i++) {
 			if (q->tins[i].decaying_flow_count) {
 				u64 next = now + q->tins[i].cparams.target;
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 8, 0)
-				codel_watchdog_schedule_ns(&q->watchdog, next,
-							   true);
-#else
 				qdisc_watchdog_schedule_ns(&q->watchdog, next);
-#endif
 				break;
 			}
 		}
