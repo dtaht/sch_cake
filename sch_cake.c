@@ -989,8 +989,7 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 	/* the 'triggering' ACK is at the tail of the queue, we have already
 	 * returned if it is the only packet in the flow. loop through the rest
 	 * of the queue looking for pure ACKs with the same 5-tuple as the
-	 * triggering one. We may have cached the position of the first pure ACK
-	 * from a previous run; if so, use that as a starting point.
+	 * triggering one.
 	 */
 	for (skb_check = flow->head;
 	     skb_check && skb_check != skb;
@@ -999,6 +998,7 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 		tcph_check = cake_get_tcphdr(skb_check, &_tcph_check,
 					     sizeof(_tcph_check));
 
+		/* only TCP packets with matching 5-tuple are eligible */
 		if (!tcph_check || iph->version != iph_check->version ||
 		    tcph_check->source != tcph->source ||
 		    tcph_check->dest != tcph->dest)
@@ -1024,11 +1024,9 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 			WARN_ON(1);  /* shouldn't happen */
 			continue;
 		}
+n
 
-
-		/* 5-tuple matches; check TCP headers
-		 *
-		 * stricter criteria apply to ACKs that we may filter
+		/* stricter criteria apply to ACKs that we may filter
 		 * 3 reserved flags must be unset to avoid future breakage
 		 * ECE/CWR/NS can be safely ignored
 		 * ACK must be set
@@ -1044,10 +1042,9 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 			 ((seglen - __tcp_hdrlen(tcph_check)) != 0))
 			continue;
 
-		/* Check that the triggering packet 5-tuple matches, and that it
-		 * ACKs more data than the ACK under consideration, either
-		 * because is has a strictly higher ACK sequence number or
-		 * because it is a SACK
+		/* The triggering packet must ACK more data than the ACK under
+		 * consideration, either because is has a strictly higher ACK
+		 * sequence number or because it is a SACK
 		 */
 		if ((ntohl(tcph_check->ack_seq) == ntohl(tcph->ack_seq) &&
 		     !cake_tcph_is_sack(tcph)) ||
