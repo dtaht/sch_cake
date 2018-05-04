@@ -1023,7 +1023,6 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 			WARN_ON(1);  /* shouldn't happen */
 			continue;
 		}
-n
 
 		/* stricter criteria apply to ACKs that we may filter
 		 * 3 reserved flags must be unset to avoid future breakage
