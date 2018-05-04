@@ -2380,7 +2380,7 @@ static int cake_init(struct Qdisc *sch, struct nlattr *opt,
 		quantum_div[i] = 65535 / i;
 
 	q->tins = kvzalloc(CAKE_MAX_TINS * sizeof(struct cake_tin_data),
-			   GFP_KERNEL | __GFP_NOWARN);
+			   GFP_KERNEL);
 	if (!q->tins)
 		goto nomem;
 
