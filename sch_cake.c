@@ -697,7 +697,7 @@ static u32 cake_hash(struct cake_tin_data *q, const struct sk_buff *skb,
 	default:
 		dsthost_hash = 0;
 		srchost_hash = 0;
-	};
+	}
 
 	/* This *must* be after the above switch, since as a
 	 * side-effect it sorts the src and dst addresses.
@@ -1345,7 +1345,7 @@ static void cake_wash_diffserv(struct sk_buff *skb)
 		break;
 	default:
 		break;
-	};
+	}
 }
 
 static u8 cake_handle_diffserv(struct sk_buff *skb, u16 wash)
@@ -1371,7 +1371,7 @@ static u8 cake_handle_diffserv(struct sk_buff *skb, u16 wash)
 	default:
 		/* If there is no Diffserv field, treat as best-effort */
 		return 0;
-	};
+	}
 }
 
 static void cake_reconfigure(struct Qdisc *sch);
@@ -2205,7 +2205,7 @@ static void cake_reconfigure(struct Qdisc *sch)
 	default:
 		ft = cake_config_diffserv3(sch);
 		break;
-	};
+	}
 
 	for (c = q->tin_cnt; c < CAKE_MAX_TINS; c++) {
 		cake_clear_tin(sch, c);
