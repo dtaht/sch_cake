@@ -134,7 +134,6 @@ struct cake_flow {
 	/* this stuff is all needed per-flow at dequeue time */
 	struct sk_buff	  *head;
 	struct sk_buff	  *tail;
-	struct sk_buff	  *ackcheck;
 	struct list_head  flowchain;
 	s32		  deficit;
 	struct cobalt_vars cvars;
@@ -707,7 +706,7 @@ static u32 cake_hash(struct cake_tin_data *q, const struct sk_buff *skb,
 	default:
 		dsthost_hash = 0;
 		srchost_hash = 0;
-	};
+	}
 
 	/* This *must* be after the above switch, since as a
 	 * side-effect it sorts the src and dst addresses.
@@ -840,9 +839,6 @@ static struct sk_buff *dequeue_head(struct cake_flow *flow)
 	if (skb) {
 		flow->head = skb->next;
 		skb->next = NULL;
-
-		if (skb == flow->ackcheck)
-			flow->ackcheck = NULL;
 	}
 
 	return skb;
@@ -937,16 +933,40 @@ static struct tcphdr *cake_get_tcphdr(const struct sk_buff *skb,
 				  min(__tcp_hdrlen(tcph), bufsize), buf);
 }
 
+static bool cake_tcph_is_sack(const struct tcphdr *tcph)
+{
+	/* inspired by tcp_parse_options in tcp_input.c */
+	int length = __tcp_hdrlen(tcph) - sizeof(struct tcphdr);
+	const u8 *ptr = (const u8 *)(tcph + 1);
+
+	while (length > 0) {
+		int opcode = *ptr++;
+		int opsize;
+
+		if (opcode == TCPOPT_EOL)
+			break;
+		if (opcode == TCPOPT_NOP) {
+			length--;
+			continue;
+		}
+		opsize = *ptr++;
+		if (opsize < 2 || opsize > length)
+			break;
+		if (opcode == TCPOPT_SACK)
+			return true;
+		ptr += opsize - 2;
+		length -= opsize;
+	}
+
+	return false;
+}
+
 static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 				       struct cake_flow *flow)
 {
-	bool thisconn_redundant_seen = false, thisconn_seen_last = false;
 	bool aggressive = q->ack_filter == CAKE_ACK_AGGRESSIVE;
-	bool otherconn_ack_seen = false;
-	struct sk_buff *skb_check, *skb_check_prev;
-	struct sk_buff *otherconn_checked_to = NULL;
-	struct sk_buff *thisconn_checked_to = NULL;
-	struct sk_buff *thisconn_ack = NULL;
+	struct sk_buff *elig_ack = NULL, *elig_ack_prev = NULL;
+	struct sk_buff *skb_check, *skb_prev = NULL;
 	const struct ipv6hdr *ipv6h, *ipv6h_check;
 	const struct tcphdr *tcph, *tcph_check;
 	const struct iphdr *iph, *iph_check;
@@ -954,7 +974,7 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 	struct ipv6hdr _iph, _iph_check;
 	struct tcphdr _tcph_check;
 	unsigned char _tcph[64]; /* need to hold maximum hdr size */
-	int seglen;
+	int seglen, num_found = 0;
 
 	/* no other possible ACKs to filter */
 	if (flow->head == flow->tail)
@@ -973,50 +993,40 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 	     (TCP_FLAG_ACK | TCP_FLAG_SYN)) != TCP_FLAG_ACK)
 		return NULL;
 
-	/* the 'triggering' ACK is at the end of the queue,
-	 * we have already returned if it is the only packet in the flow.
-	 * stop before last packet in queue, don't compare trigger ACK to itself
-	 * start where we finished last time if recorded in ->ackcheck
-	 * otherwise start from the the head of the flow queue.
+	/* the 'triggering' ACK is at the tail of the queue, we have already
+	 * returned if it is the only packet in the flow. loop through the rest
+	 * of the queue looking for pure ACKs with the same 5-tuple as the
+	 * triggering one.
 	 */
-	skb_check_prev = flow->ackcheck;
-	skb_check = flow->ackcheck ?: flow->head;
-
-	while (skb_check->next) {
-		bool pure_ack, thisconn;
-
-		/* don't increment if at head of flow queue (_prev == NULL) */
-		if (skb_check_prev) {
-			skb_check_prev = skb_check;
-			skb_check = skb_check->next;
-			if (!skb_check->next)
-				break;
-		} else {
-			skb_check_prev = ERR_PTR(-1);
-		}
-
+	for (skb_check = flow->head;
+	     skb_check && skb_check != skb;
+	     skb_prev = skb_check, skb_check = skb_check->next) {
 		iph_check = cake_get_iphdr(skb_check, &_iph_check);
 		tcph_check = cake_get_tcphdr(skb_check, &_tcph_check,
 					     sizeof(_tcph_check));
 
-		if (!tcph_check || iph->version != iph_check->version)
+		/* only TCP packets with matching 5-tuple are eligible */
+		if (!tcph_check || iph->version != iph_check->version ||
+		    tcph_check->source != tcph->source ||
+		    tcph_check->dest != tcph->dest)
 			continue;
 
-		if (iph->version == 4) {
+		if (iph_check->version == 4) {
+			if (iph_check->saddr != iph->saddr ||
+			    iph_check->daddr != iph->daddr)
+				continue;
+
 			seglen = ntohs(iph_check->tot_len) -
 				       (4 * iph_check->ihl);
-
-			thisconn = (iph_check->saddr == iph->saddr &&
-				    iph_check->daddr == iph->daddr);
-		} else if (iph->version == 6) {
+		} else if (iph_check->version == 6) {
 			ipv6h = (struct ipv6hdr *)iph;
 			ipv6h_check = (struct ipv6hdr *)iph_check;
-			seglen = ntohs(ipv6h_check->payload_len);
 
-			thisconn = (!ipv6_addr_cmp(&ipv6h_check->saddr,
-						   &ipv6h->saddr) &&
-				    !ipv6_addr_cmp(&ipv6h_check->daddr,
-						   &ipv6h->daddr));
+			if (ipv6_addr_cmp(&ipv6h_check->saddr, &ipv6h->saddr) ||
+			    ipv6_addr_cmp(&ipv6h_check->daddr, &ipv6h->daddr))
+				continue;
+
+			seglen = ntohs(ipv6h_check->payload_len);
 		} else {
 			WARN_ON(1);  /* shouldn't happen */
 			continue;
@@ -1033,161 +1043,50 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 		 * must be 'pure' ACK, contain zero bytes of segment data
 		 * options are ignored
 		 */
-		if ((tcp_flag_word(tcph_check) &
-		     (TCP_FLAG_ACK | TCP_FLAG_SYN)) != TCP_FLAG_ACK)
-			continue;
-
-		else if (((tcp_flag_word(tcph_check) &
+		if (((tcp_flag_word(tcph_check) &
 			   cpu_to_be32(0x0E3F0000)) != TCP_FLAG_ACK) ||
 			 ((seglen - __tcp_hdrlen(tcph_check)) != 0))
-			pure_ack = false;
-
-		else
-			pure_ack = true;
-
-		/* if we find an ACK belonging to a different connection
-		 * continue checking for other ACKs this round however
-		 * restart checking from the other connection next time.
-		 */
-		if (thisconn &&	(tcph_check->source != tcph->source ||
-				 tcph_check->dest != tcph->dest))
-			thisconn = false;
-
-		/* new ack sequence must be greater
-		 */
-		if (thisconn &&
-		    ((int32_t)(ntohl(tcph_check->ack_seq) -
-			       ntohl(tcph->ack_seq)) > 0))
 			continue;
 
-		/* DupACKs with an equal sequence number shouldn't be filtered,
-		 * but we can filter if the triggering packet is a SACK
+		/* The triggering packet must ACK more data than the ACK under
+		 * consideration, either because is has a strictly higher ACK
+		 * sequence number or because it is a SACK
 		 */
-		if (thisconn &&
-		    (ntohl(tcph_check->ack_seq) == ntohl(tcph->ack_seq))) {
-			/* inspired by tcp_parse_options in tcp_input.c */
-			bool sack = false;
-			int length = __tcp_hdrlen(tcph) - sizeof(struct tcphdr);
-			const u8 *ptr = (const u8 *)(tcph + 1);
+		if ((ntohl(tcph_check->ack_seq) == ntohl(tcph->ack_seq) &&
+		     !cake_tcph_is_sack(tcph)) ||
+		    (int32_t)(ntohl(tcph_check->ack_seq) -
+			      ntohl(tcph->ack_seq)) > 0)
+			continue;
 
-			while (length > 0) {
-				int opcode = *ptr++;
-				int opsize;
-
-				if (opcode == TCPOPT_EOL)
-					break;
-				if (opcode == TCPOPT_NOP) {
-					length--;
-					continue;
-				}
-				opsize = *ptr++;
-				if (opsize < 2 || opsize > length)
-					break;
-				if (opcode == TCPOPT_SACK) {
-					sack = true;
-					break;
-				}
-				ptr += opsize - 2;
-				length -= opsize;
-			}
-			if (!sack)
-				continue;
+		/* At this point we have found an eligible pure ACK to drop; if
+		 * we are in aggressive mode, we are done. Otherwise, keep
+		 * searching unless this is the second eligible ACK we
+		 * found.
+		 *
+		 * Since we want to drop ACK closest to the head of the queue,
+		 * save the first eligible ACK we find, even if we need to loop
+		 * again.
+		 */
+		if (!elig_ack) {
+			elig_ack = skb_check;
+			elig_ack_prev = skb_prev;
 		}
 
-		/* somewhat complicated control flow for 'conservative'
-		 * ACK filtering that aims to be more polite to slow-start and
-		 * in the presence of packet loss.
-		 * does not filter if there is one 'redundant' ACK in the queue.
-		 * 'data' ACKs won't be filtered but do count as redundant ACKs.
-		 */
-		if (thisconn) {
-			thisconn_seen_last = true;
-			/* if aggressive and this is a data ack we can skip
-			 * checking it next time.
-			 */
-			thisconn_checked_to = (aggressive && !pure_ack) ?
-				skb_check : skb_check_prev;
-			/* the first pure ack for this connection.
-			 * record where it is, but only break if aggressive
-			 * or already seen data ack from the same connection
-			 */
-			if (pure_ack && !thisconn_ack) {
-				thisconn_ack = skb_check_prev;
-				if (aggressive || thisconn_redundant_seen)
-					break;
-			/* data ack or subsequent pure ack */
-			} else {
-				thisconn_redundant_seen = true;
-				/* this is the second ack for this connection
-				 * break to filter the first pure ack
-				 */
-				if (thisconn_ack)
-					break;
-			}
-		/* track packets from non-matching tcp connections that will
-		 * need evaluation on the next run.
-		 * if there are packets from both the matching connection and
-		 * others that requre checking next run, track which was updated
-		 * last and return the older of the two to ensure full coverage.
-		 * if a non-matching pure ack has been seen, cannot skip any
-		 * further on the next run so don't update.
-		 */
-		} else if (!otherconn_ack_seen) {
-			thisconn_seen_last = false;
-			if (pure_ack) {
-				otherconn_ack_seen = true;
-				/* if aggressive we don't care about old data,
-				 * start from the pure ack.
-				 * otherwise if there is a previous data ack,
-				 * start checking from it next time.
-				 */
-				if (aggressive || !otherconn_checked_to)
-					otherconn_checked_to = skb_check_prev;
-			} else {
-				otherconn_checked_to = aggressive ?
-					skb_check : skb_check_prev;
-			}
-		}
+		if (num_found++ > 0 || aggressive)
+			goto found;
 	}
 
-	/* skb_check is reused at this point
-	 * it is the pure ACK to be filtered (if any)
-	 */
-	skb_check = NULL;
+	return NULL;
 
-	/* next time start checking from the older/nearest to head of unfiltered
-	 * but important tcp packets from this connection and other connections.
-	 * if none seen, start after the last packet evaluated in the loop.
-	 */
-	if (thisconn_checked_to && otherconn_checked_to)
-		flow->ackcheck = thisconn_seen_last ?
-			otherconn_checked_to : thisconn_checked_to;
-	else if (thisconn_checked_to)
-		flow->ackcheck = thisconn_checked_to;
-	else if (otherconn_checked_to)
-		flow->ackcheck = otherconn_checked_to;
+found:
+	if (elig_ack_prev)
+		elig_ack_prev->next = elig_ack->next;
 	else
-		flow->ackcheck = skb_check_prev;
+		flow->head = elig_ack->next;
 
-	/* if filtering, remove the pure ACK from the flow queue */
-	if (thisconn_ack && (aggressive || thisconn_redundant_seen)) {
-		if (PTR_ERR(thisconn_ack) == -1) {
-			skb_check = flow->head;
-			flow->head = flow->head->next;
-		} else {
-			skb_check = thisconn_ack->next;
-			thisconn_ack->next = thisconn_ack->next->next;
-		}
-	}
+	elig_ack->next = NULL;
 
-	/* we just filtered that ack, fix up the list */
-	if (flow->ackcheck == skb_check)
-		flow->ackcheck = thisconn_ack;
-	/* check the entire flow queue next time */
-	if (PTR_ERR(flow->ackcheck) == -1)
-		flow->ackcheck = NULL;
-
-	return skb_check;
+	return elig_ack;
 }
 
 static cobalt_time_t cake_ewma(cobalt_time_t avg, cobalt_time_t sample,
@@ -1446,7 +1345,7 @@ static void cake_wash_diffserv(struct sk_buff *skb)
 		break;
 	default:
 		break;
-	};
+	}
 }
 
 static u8 cake_handle_diffserv(struct sk_buff *skb, u16 wash)
@@ -1472,7 +1371,7 @@ static u8 cake_handle_diffserv(struct sk_buff *skb, u16 wash)
 	default:
 		/* If there is no Diffserv field, treat as best-effort */
 		return 0;
-	};
+	}
 }
 
 static void cake_reconfigure(struct Qdisc *sch);
@@ -1928,7 +1827,6 @@ retry:
 
 	if (q->time_next_packet > now && sch->q.qlen) {
 		u64 next = min(q->time_next_packet, q->failsafe_next_packet);
-
 		qdisc_watchdog_schedule_ns(&q->watchdog, next);
 	} else if (!sch->q.qlen) {
 		int i;
@@ -1936,7 +1834,6 @@ retry:
 		for (i = 0; i < q->tin_cnt; i++) {
 			if (q->tins[i].decaying_flow_count) {
 				u64 next = now + q->tins[i].cparams.target;
-
 				qdisc_watchdog_schedule_ns(&q->watchdog, next);
 				break;
 			}
@@ -2280,7 +2177,7 @@ static void cake_reconfigure(struct Qdisc *sch)
 	default:
 		ft = cake_config_diffserv3(sch);
 		break;
-	};
+	}
 
 	for (c = q->tin_cnt; c < CAKE_MAX_TINS; c++) {
 		cake_clear_tin(sch, c);
@@ -2418,20 +2315,12 @@ static int cake_change(struct Qdisc *sch, struct nlattr *opt,
 	return 0;
 }
 
-static void cake_free(void *addr)
-{
-	if (addr)
-		kvfree(addr);
-}
-
 static void cake_destroy(struct Qdisc *sch)
 {
 	struct cake_sched_data *q = qdisc_priv(sch);
 
 	qdisc_watchdog_cancel(&q->watchdog);
-
-	if (q->tins)
-		cake_free(q->tins);
+	kvfree(q->tins);
 }
 
 static int cake_init(struct Qdisc *sch, struct nlattr *opt,
@@ -2468,7 +2357,7 @@ static int cake_init(struct Qdisc *sch, struct nlattr *opt,
 		quantum_div[i] = 65535 / i;
 
 	q->tins = kvzalloc(CAKE_MAX_TINS * sizeof(struct cake_tin_data),
-			   GFP_KERNEL | __GFP_NOWARN);
+			   GFP_KERNEL);
 	if (!q->tins)
 		goto nomem;
 
