@@ -2379,32 +2379,34 @@ static int cake_init(struct Qdisc *sch, struct nlattr *opt,
 	for (i = 1; i <= CAKE_QUEUES; i++)
 		quantum_div[i] = 65535 / i;
 
-	q->tins = kvzalloc(CAKE_MAX_TINS * sizeof(struct cake_tin_data),
-			   GFP_KERNEL);
-	if (!q->tins)
-		goto nomem;
+	if (!q->tins) {
+		q->tins = kvzalloc(CAKE_MAX_TINS * sizeof(struct cake_tin_data),
+				GFP_KERNEL);
+		if (!q->tins)
+			goto nomem;
 
-	for (i = 0; i < CAKE_MAX_TINS; i++) {
-		struct cake_tin_data *b = q->tins + i;
+		for (i = 0; i < CAKE_MAX_TINS; i++) {
+			struct cake_tin_data *b = q->tins + i;
 
-		b->perturb = prandom_u32();
-		INIT_LIST_HEAD(&b->new_flows);
-		INIT_LIST_HEAD(&b->old_flows);
-		INIT_LIST_HEAD(&b->decaying_flows);
-		b->sparse_flow_count = 0;
-		b->bulk_flow_count = 0;
-		b->decaying_flow_count = 0;
+			b->perturb = prandom_u32();
+			INIT_LIST_HEAD(&b->new_flows);
+			INIT_LIST_HEAD(&b->old_flows);
+			INIT_LIST_HEAD(&b->decaying_flows);
+			b->sparse_flow_count = 0;
+			b->bulk_flow_count = 0;
+			b->decaying_flow_count = 0;
 
-		for (j = 0; j < CAKE_QUEUES; j++) {
-			struct cake_flow *flow = b->flows + j;
-			u32 k = j * CAKE_MAX_TINS + i;
+			for (j = 0; j < CAKE_QUEUES; j++) {
+				struct cake_flow *flow = b->flows + j;
+				u32 k = j * CAKE_MAX_TINS + i;
 
-			INIT_LIST_HEAD(&flow->flowchain);
-			cobalt_vars_init(&flow->cvars);
+				INIT_LIST_HEAD(&flow->flowchain);
+				cobalt_vars_init(&flow->cvars);
 
-			q->overflow_heap[k].t = i;
-			q->overflow_heap[k].b = j;
-			b->overflow_idx[j] = k;
+				q->overflow_heap[k].t = i;
+				q->overflow_heap[k].b = j;
+				b->overflow_idx[j] = k;
+			}
 		}
 	}
 
