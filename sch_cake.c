@@ -67,6 +67,7 @@
 #include <linux/version.h>
 #include <linux/if_vlan.h>
 #include <net/pkt_sched.h>
+#include <net/pkt_cls.h>
 #include <net/tcp.h>
 #include <net/flow_dissector.h>
 
@@ -205,6 +206,8 @@ struct cake_tin_data {
 }; /* number of tins is small, so size of this struct doesn't matter much */
 
 struct cake_sched_data {
+	struct tcf_proto __rcu *filter_list; /* optional external classifier */
+	struct tcf_block *block;
 	struct cake_tin_data *tins;
 
 	struct cake_heap_entry overflow_heap[CAKE_QUEUES * CAKE_MAX_TINS];
@@ -829,6 +832,39 @@ found_dst:
 	return reduced_hash;
 }
 
+static u32 cake_classify(struct Qdisc *sch, struct cake_tin_data *t,
+			 struct sk_buff *skb, int flow_mode, int *qerr)
+{
+	struct cake_sched_data *q = qdisc_priv(sch);
+	struct tcf_proto *filter;
+	struct tcf_result res;
+	int result;
+
+	filter = rcu_dereference_bh(q->filter_list);
+	if (!filter)
+		return cake_hash(t, skb, flow_mode) + 1;
+
+	*qerr = NET_XMIT_SUCCESS;
+	result = tcf_classify(skb, filter, &res, false);
+	if (result >= 0) {
+#ifdef CONFIG_NET_CLS_ACT
+		switch (result) {
+		case TC_ACT_STOLEN:
+		case TC_ACT_QUEUED:
+		case TC_ACT_TRAP:
+			*qerr = NET_XMIT_SUCCESS | __NET_XMIT_STOLEN;
+			/* fall through */
+		case TC_ACT_SHOT:
+			return 0;
+		}
+#endif
+		if (TC_H_MIN(res.classid) <= CAKE_QUEUES)
+			return TC_H_MIN(res.classid);
+	}
+	return 0;
+}
+
+
 /* helper functions : might be changed when/if skb use a standard list_head */
 /* remove one skb from head of slot queue */
 
@@ -1387,10 +1423,19 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 	int len = qdisc_pkt_len(skb);
 	u64 now = cobalt_get_time();
 	struct sk_buff *ack = NULL;
+	int uninitialized_var(ret);
 
-	/* extract the Diffserv Precedence field, if it exists */
-	/* and clear DSCP bits if washing */
-	if (q->tin_mode != CAKE_DIFFSERV_BESTEFFORT) {
+
+	if (TC_H_MAJ(skb->priority) == sch->handle &&
+	    TC_H_MIN(skb->priority) > 0 &&
+	    TC_H_MIN(skb->priority) <= q->tin_cnt) {
+		tin = TC_H_MIN(skb->priority) - 1;
+
+		if (q->rate_flags & CAKE_FLAG_WASH)
+			cake_wash_diffserv(skb);
+	} else if (q->tin_mode != CAKE_DIFFSERV_BESTEFFORT) {
+		/* extract the Diffserv Precedence field, if it exists */
+		/* and clear DSCP bits if washing */
 		tin = q->tin_index[cake_handle_diffserv(skb,
 				q->rate_flags & CAKE_FLAG_WASH)];
 		if (unlikely(tin >= q->tin_cnt))
@@ -1404,7 +1449,12 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 	b = &q->tins[tin];
 
 	/* choose flow to insert into */
-	idx = cake_hash(b, skb, q->flow_mode);
+	idx = cake_classify(sch, b, skb, q->flow_mode, &ret);
+	if (idx == 0) {
+		consume_skb(skb);
+		return ret;
+	}
+	idx--;
 	flow = &b->flows[idx];
 
 	/* ensure shaper state isn't stale */
@@ -2320,6 +2370,7 @@ static void cake_destroy(struct Qdisc *sch)
 	struct cake_sched_data *q = qdisc_priv(sch);
 
 	qdisc_watchdog_cancel(&q->watchdog);
+	tcf_block_put(q->block);
 	kvfree(q->tins);
 }
 
@@ -2327,7 +2378,7 @@ static int cake_init(struct Qdisc *sch, struct nlattr *opt,
 		     struct netlink_ext_ack *extack)
 {
 	struct cake_sched_data *q = qdisc_priv(sch);
-	int i, j;
+	int i, j, err;
 
 	sch->limit = 10240;
 	q->tin_mode = CAKE_DIFFSERV_DIFFSERV3;
@@ -2349,6 +2400,10 @@ static int cake_init(struct Qdisc *sch, struct nlattr *opt,
 		if (err)
 			return err;
 	}
+
+	err = tcf_block_get(&q->block, &q->filter_list, sch, extack);
+	if (err)
+		return err;
 
 	qdisc_watchdog_init(&q->watchdog, sch);
 
