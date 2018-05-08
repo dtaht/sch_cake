@@ -2953,7 +2953,51 @@ nla_put_failure:
 	return -1;
 }
 
+static struct Qdisc *cake_leaf(struct Qdisc *sch, unsigned long arg)
+{
+	return NULL;
+}
+
+static unsigned long cake_find(struct Qdisc *sch, u32 classid)
+{
+	return 0;
+}
+
+static void cake_walk(struct Qdisc *sch, struct qdisc_walker *arg)
+{
+}
+
+static unsigned long cake_bind(struct Qdisc *sch, unsigned long parent,
+			      u32 classid)
+{
+	return 0;
+}
+
+static void cake_unbind(struct Qdisc *q, unsigned long cl)
+{
+}
+
+static struct tcf_block *cake_tcf_block(struct Qdisc *sch, unsigned long cl,
+					    struct netlink_ext_ack *extack)
+{
+	struct cake_sched_data *q = qdisc_priv(sch);
+
+	if (cl)
+		return NULL;
+	return q->block;
+}
+
+static const struct Qdisc_class_ops cake_class_ops = {
+	.leaf		=	cake_leaf,
+	.find		=	cake_find,
+	.tcf_block	=	cake_tcf_block,
+	.bind_tcf	=	cake_bind,
+	.unbind_tcf	=	cake_unbind,
+	.walk		=	cake_walk,
+};
+
 static struct Qdisc_ops cake_qdisc_ops __read_mostly = {
+	.cl_ops		=	&cake_class_ops,
 	.id		=	"cake",
 	.priv_size	=	sizeof(struct cake_sched_data),
 	.enqueue	=	cake_enqueue,
