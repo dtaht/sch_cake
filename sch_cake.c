@@ -844,7 +844,7 @@ static u32 cake_classify(struct Qdisc *sch, struct cake_tin_data *t,
 	if (!filter)
 		return cake_hash(t, skb, flow_mode) + 1;
 
-	*qerr = NET_XMIT_SUCCESS;
+	*qerr = NET_XMIT_SUCCESS | __NET_XMIT_BYPASS;
 	result = tcf_classify(skb, filter, &res, false);
 	if (result >= 0) {
 #ifdef CONFIG_NET_CLS_ACT
@@ -1451,7 +1451,9 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 	/* choose flow to insert into */
 	idx = cake_classify(sch, b, skb, q->flow_mode, &ret);
 	if (idx == 0) {
-		consume_skb(skb);
+		if (ret & __NET_XMIT_BYPASS)
+			qdisc_qstats_drop(sch);
+		__qdisc_drop(skb, to_free);
 		return ret;
 	}
 	idx--;
