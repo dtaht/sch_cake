@@ -313,9 +313,12 @@ static u32 cobalt_rec_inv_sqrt_cache[REC_INV_SQRT_CACHE] = {0};
 
 static void cobalt_newton_step(struct cobalt_vars *vars)
 {
-	u32 invsqrt = vars->rec_inv_sqrt;
-	u32 invsqrt2 = ((u64)invsqrt * invsqrt) >> 32;
-	u64 val = (3LL << 32) - ((u64)vars->count * invsqrt2);
+	u32 invsqrt, invsqrt2;
+	u64 val;
+
+	invsqrt = vars->rec_inv_sqrt;
+	invsqrt2 = ((u64)invsqrt * invsqrt) >> 32;
+	val = (3LL << 32) - ((u64)vars->count * invsqrt2);
 
 	val >>= 2; /* avoid overflow in following multiply */
 	val = (val * invsqrt) >> (32 - 2 + 1);
@@ -443,10 +446,8 @@ static bool cobalt_should_drop(struct cobalt_vars *vars,
 			       struct sk_buff *skb,
 			       u32 bulk_flows)
 {
-	bool drop = false;
-
-	/* Simplified Codel implementation */
-	cobalt_tdiff_t sojourn  = now - cobalt_get_enqueue_time(skb);
+	bool next_due, over_target, drop = false;
+	cobalt_tdiff_t sojourn, schedule;
 
 /* The 'schedule' variable records, in its sign, whether 'now' is before or
  * after 'drop_next'.  This allows 'drop_next' to be updated before the next
@@ -463,11 +464,12 @@ static bool cobalt_should_drop(struct cobalt_vars *vars,
  * as possible to 1.0 in fixed-point.
  */
 
-	cobalt_tdiff_t schedule = now - vars->drop_next;
-	bool over_target = sojourn > p->target &&
-	                   sojourn > p->mtu_time * bulk_flows * 2 &&
-	                   sojourn > p->mtu_time * 4;
-	bool next_due    = vars->count && schedule >= 0;
+	sojourn = now - cobalt_get_enqueue_time(skb);
+	schedule = now - vars->drop_next;
+	over_target = sojourn > p->target &&
+		      sojourn > p->mtu_time * bulk_flows * 2 &&
+		      sojourn > p->mtu_time * 4;
+	next_due = vars->count && schedule >= 0;
 
 	vars->ecn_marked = false;
 
@@ -530,11 +532,10 @@ static bool cobalt_should_drop(struct cobalt_vars *vars,
 static void cake_update_flowkeys(struct flow_keys *keys,
 				 const struct sk_buff *skb)
 {
-	enum ip_conntrack_info ctinfo;
-	bool rev = false;
-
-	struct nf_conn *ct;
 	const struct nf_conntrack_tuple *tuple;
+	enum ip_conntrack_info ctinfo;
+	struct nf_conn *ct;
+	bool rev = false;
 
 	if (tc_skb_protocol(skb) != htons(ETH_P_IP))
 		return;
@@ -620,13 +621,13 @@ static bool cake_ddst(int flow_mode)
 static u32 cake_hash(struct cake_tin_data *q, const struct sk_buff *skb,
 		     int flow_mode)
 {
+	u32 flow_hash = 0, srchost_hash, dsthost_hash;
+	u16 reduced_hash, srchost_idx, dsthost_idx;
 #if KERNEL_VERSION(4, 2, 0) > LINUX_VERSION_CODE
 	struct flow_keys keys;
 #else
 	struct flow_keys keys, host_keys;
 #endif
-	u32 flow_hash = 0, srchost_hash, dsthost_hash;
-	u16 reduced_hash, srchost_idx, dsthost_idx;
 
 	if (unlikely(flow_mode == CAKE_FLOW_NONE))
 		return 0;
@@ -720,9 +721,9 @@ static u32 cake_hash(struct cake_tin_data *q, const struct sk_buff *skb,
 	} else {
 		u32 inner_hash = reduced_hash % CAKE_SET_WAYS;
 		u32 outer_hash = reduced_hash - inner_hash;
-		u32 i, k;
 		bool allocate_src = false;
 		bool allocate_dst = false;
+		u32 i, k;
 
 		/* check if any active queue in the set is reserved for
 		 * this flow.
@@ -958,11 +959,11 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 	const struct ipv6hdr *ipv6h, *ipv6h_check;
 	const struct tcphdr *tcph, *tcph_check;
 	const struct iphdr *iph, *iph_check;
-	const struct sk_buff *skb;
 	struct ipv6hdr _iph, _iph_check;
+	const struct sk_buff *skb;
 	struct tcphdr _tcph_check;
-	unsigned char _tcph[64]; /* need to hold maximum hdr size */
 	int seglen, num_found = 0;
+	unsigned char _tcph[64]; /* need to hold maximum hdr size */
 
 	/* no other possible ACKs to filter */
 	if (flow->head == flow->tail)
@@ -1188,8 +1189,8 @@ static u32 cake_heap_get_backlog(const struct cake_sched_data *q, u16 i)
 static void cake_heapify(struct cake_sched_data *q, u16 i)
 {
 	static const u32 a = CAKE_MAX_TINS * CAKE_QUEUES;
+	u32 mb = cake_heap_get_backlog(q, i);
 	u32 m = i;
-	u32 mb = cake_heap_get_backlog(q, m);
 
 	while (m < a) {
 		u32 l = m + m + 1;
@@ -1273,12 +1274,12 @@ static unsigned int cake_drop(struct Qdisc *sch, struct sk_buff **to_free)
 #endif
 {
 	struct cake_sched_data *q = qdisc_priv(sch);
-	struct sk_buff *skb;
+	u64 now = cobalt_get_time();
 	u32 idx = 0, tin = 0, len;
+	struct cake_heap_entry qq;
 	struct cake_tin_data *b;
 	struct cake_flow *flow;
-	struct cake_heap_entry qq;
-	u64 now = cobalt_get_time();
+	struct sk_buff *skb;
 
 	if (!q->overflow_timeout) {
 		int i;
@@ -1380,13 +1381,12 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 #endif
 {
 	struct cake_sched_data *q = qdisc_priv(sch);
-	u32 idx, tin;
-	struct cake_tin_data *b;
-	struct cake_flow *flow;
-	/* signed len to handle corner case filtered ACK larger than trigger */
 	int len = qdisc_pkt_len(skb);
 	u64 now = cobalt_get_time();
 	struct sk_buff *ack = NULL;
+	struct cake_tin_data *b;
+	struct cake_flow *flow;
+	u32 idx, tin;
 
 	/* extract the Diffserv Precedence field, if it exists */
 	/* and clear DSCP bits if washing */
@@ -1625,16 +1625,16 @@ static void cake_clear_tin(struct Qdisc *sch, u16 tin)
 static struct sk_buff *cake_dequeue(struct Qdisc *sch)
 {
 	struct cake_sched_data *q = qdisc_priv(sch);
-	struct sk_buff *skb;
 	struct cake_tin_data *b = &q->tins[q->cur_tin];
-	struct cake_flow *flow;
 	struct cake_host *srchost, *dsthost;
-	struct list_head *head;
-	u32 len;
-	u16 host_load;
 	cobalt_time_t now = ktime_get_ns();
-	cobalt_time_t delay;
+	struct cake_flow *flow;
+	struct list_head *head;
 	bool first_flow = true;
+	cobalt_time_t delay;
+	struct sk_buff *skb;
+	u16 host_load;
+	u32 len;
 
 begin:
 	if (!sch->q.qlen)
@@ -1670,8 +1670,8 @@ begin:
 		 * - Highest-priority tin with queue and meeting schedule, or
 		 * - The earliest-scheduled tin with queue.
 		 */
-		int tin, best_tin = 0;
 		s64 best_time = 0xFFFFFFFFFFFFUL;
+		int tin, best_tin = 0;
 
 		for (tin = 0; tin < q->tin_cnt; tin++) {
 			b = q->tins + tin;
@@ -1885,10 +1885,10 @@ static void cake_set_rate(struct cake_tin_data *b, u64 rate, u32 mtu,
 	 * so it will always unwedge in reasonable time.
 	 */
 	static const u64 MIN_RATE = 64;
-	u64 rate_ns = 0;
-	u8  rate_shft = 0;
 	cobalt_time_t byte_target_ns;
 	u32 byte_target = mtu;
+	u8  rate_shft = 0;
+	u64 rate_ns = 0;
 
 	b->flow_quantum = 1514;
 	if (rate) {
@@ -1921,8 +1921,8 @@ static int cake_config_besteffort(struct Qdisc *sch)
 {
 	struct cake_sched_data *q = qdisc_priv(sch);
 	struct cake_tin_data *b = &q->tins[0];
-	u32 rate = q->rate_bps;
 	u32 mtu = psched_mtu(qdisc_dev(sch));
+	u32 rate = q->rate_bps;
 
 	q->tin_cnt = 1;
 
@@ -1940,8 +1940,8 @@ static int cake_config_precedence(struct Qdisc *sch)
 {
 	/* convert high-level (user visible) parameters into internal format */
 	struct cake_sched_data *q = qdisc_priv(sch);
-	u32 rate = q->rate_bps;
 	u32 mtu = psched_mtu(qdisc_dev(sch));
+	u32 rate = q->rate_bps;
 	u32 quantum1 = 256;
 	u32 quantum2 = 256;
 	u32 i;
@@ -2034,8 +2034,8 @@ static int cake_config_diffserv8(struct Qdisc *sch)
  */
 
 	struct cake_sched_data *q = qdisc_priv(sch);
-	u32 rate = q->rate_bps;
 	u32 mtu = psched_mtu(qdisc_dev(sch));
+	u32 rate = q->rate_bps;
 	u32 quantum1 = 256;
 	u32 quantum2 = 256;
 	u32 i;
@@ -2083,8 +2083,8 @@ static int cake_config_diffserv4(struct Qdisc *sch)
  */
 
 	struct cake_sched_data *q = qdisc_priv(sch);
-	u32 rate = q->rate_bps;
 	u32 mtu = psched_mtu(qdisc_dev(sch));
+	u32 rate = q->rate_bps;
 	u32 quantum = 1024;
 
 	q->tin_cnt = 4;
@@ -2126,8 +2126,8 @@ static int cake_config_diffserv3(struct Qdisc *sch)
  *		Latency Sensitive	(TOS4, VA, EF, CS6, CS7)
  */
 	struct cake_sched_data *q = qdisc_priv(sch);
-	u32 rate = q->rate_bps;
 	u32 mtu = psched_mtu(qdisc_dev(sch));
+	u32 rate = q->rate_bps;
 	u32 quantum = 1024;
 
 	q->tin_cnt = 3;
@@ -2491,8 +2491,8 @@ nla_put_failure:
 
 static int cake_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 {
-	struct cake_sched_data *q = qdisc_priv(sch);
 	struct nlattr *stats = nla_nest_start(d->skb, TCA_STATS_APP);
+	struct cake_sched_data *q = qdisc_priv(sch);
 	struct nlattr *tstats, *ts;
 	int i;
 
