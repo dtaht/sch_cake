@@ -1086,53 +1086,8 @@ static cobalt_time_t cake_ewma(cobalt_time_t avg, cobalt_time_t sample,
 	return avg;
 }
 
-static u32 cake_overhead(struct cake_sched_data *q, struct sk_buff *skb)
+static u32 cake_calc_overhead(struct cake_sched_data *q, u32 len, u32 off)
 {
-	const struct skb_shared_info *shinfo = skb_shinfo(skb);
-	u32 off = skb_network_offset(skb);
-	u32 len = qdisc_pkt_len(skb);
-	u16 segs = 1;
-
-	if (unlikely(shinfo->gso_size)) {
-		/* borrowed from qdisc_pkt_len_init() */
-		unsigned int hdr_len;
-
-		hdr_len = skb_transport_header(skb) - skb_mac_header(skb);
-
-		/* + transport layer */
-		if (likely(shinfo->gso_type & (SKB_GSO_TCPV4 |
-					       SKB_GSO_TCPV6))) {
-			const struct tcphdr *th;
-			struct tcphdr _tcphdr;
-
-			th = skb_header_pointer(skb, skb_transport_offset(skb),
-						sizeof(_tcphdr), &_tcphdr);
-			if (likely(th))
-				hdr_len += __tcp_hdrlen(th);
-		} else {
-			struct udphdr _udphdr;
-
-			if (skb_header_pointer(skb, skb_transport_offset(skb),
-					       sizeof(_udphdr), &_udphdr))
-				hdr_len += sizeof(struct udphdr);
-		}
-
-		if (unlikely(shinfo->gso_type & SKB_GSO_DODGY))
-			segs = DIV_ROUND_UP(skb->len - hdr_len,
-					    shinfo->gso_size);
-		else
-			segs = shinfo->gso_segs;
-
-		/* The last segment may be shorter; we ignore this, which means
-		 * that we will over-estimate the size of the whole GSO segment
-		 * by the difference in size. This is conservative, so we live
-		 * with that to avoid the complexity of dealing with it.
-		 */
-		len = shinfo->gso_size + hdr_len;
-	}
-
-	q->avg_netoff = cake_ewma(q->avg_netoff, off << 16, 8);
-
 	if (q->rate_flags & CAKE_FLAG_OVERHEAD)
 		len -= off;
 
@@ -1163,8 +1118,54 @@ static u32 cake_overhead(struct cake_sched_data *q, struct sk_buff *skb)
 	if (q->min_adjlen > len)
 		q->min_adjlen = len;
 
-	get_cobalt_cb(skb)->adjusted_len = len * segs;
 	return len;
+}
+
+static u32 cake_overhead(struct cake_sched_data *q, const struct sk_buff *skb)
+{
+	const struct skb_shared_info *shinfo = skb_shinfo(skb);
+	unsigned int hdr_len, last_len = 0;
+	u32 off = skb_network_offset(skb);
+	u32 len = qdisc_pkt_len(skb);
+	u16 segs = 1;
+
+	q->avg_netoff = cake_ewma(q->avg_netoff, off << 16, 8);
+
+	if (!shinfo->gso_size)
+		return cake_calc_overhead(q, len, off);
+
+	/* borrowed from qdisc_pkt_len_init() */
+	hdr_len = skb_transport_header(skb) - skb_mac_header(skb);
+
+	/* + transport layer */
+	if (likely(shinfo->gso_type & (SKB_GSO_TCPV4 |
+						SKB_GSO_TCPV6))) {
+		const struct tcphdr *th;
+		struct tcphdr _tcphdr;
+
+		th = skb_header_pointer(skb, skb_transport_offset(skb),
+					sizeof(_tcphdr), &_tcphdr);
+		if (likely(th))
+			hdr_len += __tcp_hdrlen(th);
+	} else {
+		struct udphdr _udphdr;
+
+		if (skb_header_pointer(skb, skb_transport_offset(skb),
+					sizeof(_udphdr), &_udphdr))
+			hdr_len += sizeof(struct udphdr);
+	}
+
+	if (unlikely(shinfo->gso_type & SKB_GSO_DODGY))
+		segs = DIV_ROUND_UP(skb->len - hdr_len,
+				shinfo->gso_size);
+	else
+		segs = shinfo->gso_segs;
+
+	len = shinfo->gso_size + hdr_len;
+	last_len = skb->len - shinfo->gso_size * (segs - 1);
+
+	return (cake_calc_overhead(q, len, off) * (segs - 1) +
+		cake_calc_overhead(q, last_len, off));
 }
 
 static void cake_heap_swap(struct cake_sched_data *q, u16 i, u16 j)
