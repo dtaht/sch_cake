@@ -1894,10 +1894,10 @@ static void cake_set_rate(struct cake_tin_data *b, u64 rate, u32 mtu,
 	b->flow_quantum = 1514;
 	if (rate) {
 		b->flow_quantum = max(min(rate >> 12, 1514ULL), 300ULL);
-		rate_shft = 32;
+		rate_shft = 34;
 		rate_ns = ((u64)NSEC_PER_SEC) << rate_shft;
-		do_div(rate_ns, max(MIN_RATE, rate));
-		while (!!(rate_ns >> 32)) {
+		rate_ns /= max(MIN_RATE, rate);
+		while (!!(rate_ns >> 34)) {
 			rate_ns >>= 1;
 			rate_shft--;
 		}
