@@ -147,8 +147,8 @@ struct cake_tin_data {
 
 	/* time_next = time_this + ((len * rate_ns) >> rate_shft) */
 	u64	tin_time_next_packet;
-	u32	tin_rate_ns;
-	u32	tin_rate_bps;
+	u64	tin_rate_ns;
+	u64	tin_rate_bps;
 	u16	tin_rate_shft;
 
 	u16	tin_quantum_prio;
@@ -192,8 +192,8 @@ struct cake_sched_data {
 	u16		rate_shft;
 	u64		time_next_packet;
 	u64		failsafe_next_packet;
-	u32		rate_ns;
-	u32		rate_bps;
+	u64		rate_ns;
+	u64		rate_bps;
 	u16		rate_flags;
 	s16		rate_overhead;
 	u16		rate_mpu;
@@ -218,8 +218,8 @@ struct cake_sched_data {
 	u64		last_packet_time;
 	u64		avg_packet_interval;
 	u64		avg_window_begin;
-	u32		avg_window_bytes;
-	u32		avg_peak_bandwidth;
+	u64		avg_window_bytes;
+	u64		avg_peak_bandwidth;
 	u64		last_reconfig_time;
 
 	/* packet length stats */
@@ -1252,8 +1252,8 @@ static int cake_advance_shaper(struct cake_sched_data *q,
 	 */
 	if (q->rate_ns) {
 		s64 tdiff1 = b->tin_time_next_packet - now;
-		s64 tdiff2 = (len * (u64)b->tin_rate_ns) >> b->tin_rate_shft;
-		s64 tdiff3 = (len * (u64)q->rate_ns) >> q->rate_shft;
+		s64 tdiff2 = (len * b->tin_rate_ns) >> b->tin_rate_shft;
+		s64 tdiff3 = (len * q->rate_ns) >> q->rate_shft;
 		s64 tdiff4 = tdiff3 + (tdiff3 >> 1);
 
 		if (tdiff1 < 0)
@@ -1862,7 +1862,7 @@ static void cake_reset(struct Qdisc *sch)
 }
 
 static const struct nla_policy cake_policy[TCA_CAKE_MAX + 1] = {
-	[TCA_CAKE_BASE_RATE]     = { .type = NLA_U32 },
+	[TCA_CAKE_BASE_RATE64]   = { .type = NLA_U64 },
 	[TCA_CAKE_DIFFSERV_MODE] = { .type = NLA_U32 },
 	[TCA_CAKE_ATM]		 = { .type = NLA_U32 },
 	[TCA_CAKE_FLOW_MODE]     = { .type = NLA_U32 },
@@ -1923,7 +1923,7 @@ static int cake_config_besteffort(struct Qdisc *sch)
 	struct cake_sched_data *q = qdisc_priv(sch);
 	struct cake_tin_data *b = &q->tins[0];
 	u32 mtu = psched_mtu(qdisc_dev(sch));
-	u32 rate = q->rate_bps;
+	u64 rate = q->rate_bps;
 
 	q->tin_cnt = 1;
 
@@ -1942,7 +1942,7 @@ static int cake_config_precedence(struct Qdisc *sch)
 	/* convert high-level (user visible) parameters into internal format */
 	struct cake_sched_data *q = qdisc_priv(sch);
 	u32 mtu = psched_mtu(qdisc_dev(sch));
-	u32 rate = q->rate_bps;
+	u64 rate = q->rate_bps;
 	u32 quantum1 = 256;
 	u32 quantum2 = 256;
 	u32 i;
@@ -2036,7 +2036,7 @@ static int cake_config_diffserv8(struct Qdisc *sch)
 
 	struct cake_sched_data *q = qdisc_priv(sch);
 	u32 mtu = psched_mtu(qdisc_dev(sch));
-	u32 rate = q->rate_bps;
+	u64 rate = q->rate_bps;
 	u32 quantum1 = 256;
 	u32 quantum2 = 256;
 	u32 i;
@@ -2085,7 +2085,7 @@ static int cake_config_diffserv4(struct Qdisc *sch)
 
 	struct cake_sched_data *q = qdisc_priv(sch);
 	u32 mtu = psched_mtu(qdisc_dev(sch));
-	u32 rate = q->rate_bps;
+	u64 rate = q->rate_bps;
 	u32 quantum = 1024;
 
 	q->tin_cnt = 4;
@@ -2128,7 +2128,7 @@ static int cake_config_diffserv3(struct Qdisc *sch)
  */
 	struct cake_sched_data *q = qdisc_priv(sch);
 	u32 mtu = psched_mtu(qdisc_dev(sch));
-	u32 rate = q->rate_bps;
+	u64 rate = q->rate_bps;
 	u32 quantum = 1024;
 
 	q->tin_cnt = 3;
@@ -2198,7 +2198,7 @@ static void cake_reconfigure(struct Qdisc *sch)
 	if (q->buffer_config_limit) {
 		q->buffer_limit = q->buffer_config_limit;
 	} else if (q->rate_bps) {
-		u64 t = (u64)q->rate_bps * q->interval;
+		u64 t = q->rate_bps * q->interval;
 
 		do_div(t, USEC_PER_SEC / 4);
 		q->buffer_limit = max_t(u32, t, 4U << 20);
@@ -2235,8 +2235,8 @@ static int cake_change(struct Qdisc *sch, struct nlattr *opt,
 	if (err < 0)
 		return err;
 
-	if (tb[TCA_CAKE_BASE_RATE])
-		q->rate_bps = nla_get_u32(tb[TCA_CAKE_BASE_RATE]);
+	if (tb[TCA_CAKE_BASE_RATE64])
+		q->rate_bps = nla_get_u64(tb[TCA_CAKE_BASE_RATE64]);
 
 	if (tb[TCA_CAKE_DIFFSERV_MODE])
 		q->tin_mode = nla_get_u32(tb[TCA_CAKE_DIFFSERV_MODE]);
@@ -2431,7 +2431,8 @@ static int cake_dump(struct Qdisc *sch, struct sk_buff *skb)
 	if (!opts)
 		goto nla_put_failure;
 
-	if (nla_put_u32(skb, TCA_CAKE_BASE_RATE, q->rate_bps))
+	if (nla_put_u64_64bit(skb, TCA_CAKE_BASE_RATE64, q->rate_bps,
+			      TCA_CAKE_TIN_STATS_PAD))
 		goto nla_put_failure;
 
 	if (nla_put_u32(skb, TCA_CAKE_DIFFSERV_MODE, q->tin_mode))
@@ -2504,8 +2505,13 @@ static int cake_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 		if (nla_put_u32(d->skb, TCA_CAKE_STATS_ ## attr, data)) \
 			goto nla_put_failure;			       \
 	} while (0)
+#define PUT_STAT_U64(attr, data) do {				       \
+		if (nla_put_u64_64bit(d->skb, TCA_CAKE_STATS_ ## attr, \
+					data, TCA_CAKE_TIN_STATS_PAD)) \
+			goto nla_put_failure;			       \
+	} while (0)
 
-	PUT_STAT_U32(CAPACITY_ESTIMATE, q->avg_peak_bandwidth);
+	PUT_STAT_U64(CAPACITY_ESTIMATE64, q->avg_peak_bandwidth);
 	PUT_STAT_U32(MEMORY_LIMIT, q->buffer_limit);
 	PUT_STAT_U32(MEMORY_USED, q->buffer_max_used);
 	PUT_STAT_U32(AVG_NETOFF, ((q->avg_netoff + 0x8000) >> 16));
@@ -2515,6 +2521,7 @@ static int cake_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 	PUT_STAT_U32(MIN_ADJLEN, q->min_adjlen);
 
 #undef PUT_STAT_U32
+#undef PUT_STAT_U64
 
 	tstats = nla_nest_start(d->skb, TCA_CAKE_STATS_TIN_STATS);
 	if (!tstats)
@@ -2537,7 +2544,7 @@ static int cake_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 		if (!ts)
 			goto nla_put_failure;
 
-		PUT_TSTAT_U32(THRESHOLD_RATE, b->tin_rate_bps);
+		PUT_TSTAT_U64(THRESHOLD_RATE64, b->tin_rate_bps);
 		PUT_TSTAT_U32(TARGET_US, cobalt_time_to_us(b->cparams.target));
 		PUT_TSTAT_U32(INTERVAL_US,
 			      cobalt_time_to_us(b->cparams.interval));
