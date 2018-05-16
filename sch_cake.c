@@ -53,6 +53,7 @@
 #include <linux/module.h>
 #include <linux/types.h>
 #include <linux/kernel.h>
+#include <linux/ktime.h>
 #include <linux/jiffies.h>
 #include <linux/string.h>
 #include <linux/in.h>
@@ -68,12 +69,14 @@
 #include "pkt_sched.h"
 #include <linux/if_vlan.h>
 #include <net/tcp.h>
+#include <net/inet_ecn.h>
+#include <net/pkt_sched.h>
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 2, 0)
 #include <net/flow_keys.h>
 #else
 #include <net/flow_dissector.h>
 #endif
-#include "cobalt.h"
+#include "cobalt_compat.h"
 
 #if IS_REACHABLE(CONFIG_NF_CONNTRACK)
 #include <net/netfilter/nf_conntrack_core.h>
@@ -91,6 +94,41 @@
 #endif
 static char *cake_version __attribute__((used)) = "Cake version: "
 		CAKE_VERSION;
+
+/**
+ * struct cobalt_params - contains codel and blue parameters
+ * @interval:	codel initial drop rate
+ * @target:     maximum persistent sojourn time & blue update rate
+ * @mtu_time:   serialisation delay of maximum-size packet
+ * @p_inc:      increment of blue drop probability (0.32 fxp)
+ * @p_dec:      decrement of blue drop probability (0.32 fxp)
+ */
+struct cobalt_params {
+	u64	interval;
+	u64	target;
+	u64	mtu_time;
+	u32	p_inc;
+	u32	p_dec;
+};
+
+/* struct cobalt_vars - contains codel and blue variables
+ * @count:	  codel dropping frequency
+ * @rec_inv_sqrt: reciprocal value of sqrt(count) >> 1
+ * @drop_next:    time to drop next packet, or when we dropped last
+ * @blue_timer:	  Blue time to next drop
+ * @p_drop:       BLUE drop probability (0.32 fxp)
+ * @dropping:     set if in dropping state
+ * @ecn_marked:   set if marked
+ */
+struct cobalt_vars {
+	u32	count;
+	u32	rec_inv_sqrt;
+	ktime_t	drop_next;
+	ktime_t	blue_timer;
+	u32     p_drop;
+	bool	dropping;
+	bool    ecn_marked;
+};
 
 enum {
 	CAKE_SET_NONE = 0,
@@ -146,7 +184,7 @@ struct cake_tin_data {
 	struct list_head decaying_flows;
 
 	/* time_next = time_this + ((len * rate_ns) >> rate_shft) */
-	u64	tin_time_next_packet;
+	ktime_t	time_next_packet;
 	u64	tin_rate_ns;
 	u64	tin_rate_bps;
 	u16	tin_rate_shft;
@@ -164,9 +202,9 @@ struct cake_tin_data {
 	u32	ack_drops;
 
 	/* moving averages */
-	cobalt_time_t avge_delay;
-	cobalt_time_t peak_delay;
-	cobalt_time_t base_delay;
+	u64 avge_delay;
+	u64 peak_delay;
+	u64 base_delay;
 
 	/* hash function stats */
 	u32	way_directs;
@@ -190,15 +228,15 @@ struct cake_sched_data {
 
 	/* time_next = time_this + ((len * rate_ns) >> rate_shft) */
 	u16		rate_shft;
-	u64		time_next_packet;
-	u64		failsafe_next_packet;
+	ktime_t		time_next_packet;
+	ktime_t		failsafe_next_packet;
 	u64		rate_ns;
 	u64		rate_bps;
 	u16		rate_flags;
 	s16		rate_overhead;
 	u16		rate_mpu;
-	u32		interval;
-	u32		target;
+	u64		interval;
+	u64		target;
 
 	/* resource tracking */
 	u32		buffer_used;
@@ -215,12 +253,12 @@ struct cake_sched_data {
 	const u8	*tin_order;
 
 	/* bandwidth capacity estimate */
-	u64		last_packet_time;
+	ktime_t		last_packet_time;
+	ktime_t		avg_window_begin;
 	u64		avg_packet_interval;
-	u64		avg_window_begin;
 	u64		avg_window_bytes;
 	u64		avg_peak_bandwidth;
-	u64		last_reconfig_time;
+	ktime_t		last_reconfig_time;
 
 	/* packet length stats */
 	u32 avg_netoff;
@@ -237,6 +275,33 @@ enum {
 	CAKE_FLAG_WASH		   = BIT(3),
 	CAKE_FLAG_SPLIT_GSO	   = BIT(4)
 };
+
+struct cobalt_skb_cb {
+	ktime_t enqueue_time;
+	u32     adjusted_len;
+};
+
+static u64 us_to_ns(u64 us)
+{
+	return us * NSEC_PER_USEC;
+}
+
+static inline struct cobalt_skb_cb *get_cobalt_cb(const struct sk_buff *skb)
+{
+	qdisc_cb_private_validate(skb, sizeof(struct cobalt_skb_cb));
+	return (struct cobalt_skb_cb *)qdisc_skb_cb(skb)->data;
+}
+
+static inline ktime_t cobalt_get_enqueue_time(const struct sk_buff *skb)
+{
+	return get_cobalt_cb(skb)->enqueue_time;
+}
+
+static inline void cobalt_set_enqueue_time(struct sk_buff *skb,
+					   ktime_t now)
+{
+	get_cobalt_cb(skb)->enqueue_time = now;
+}
 
 static u16 quantum_div[CAKE_QUEUES + 1] = {0};
 
@@ -376,11 +441,12 @@ static void cobalt_vars_init(struct cobalt_vars *vars)
  * We maintain in rec_inv_sqrt the reciprocal value of sqrt(count) to avoid
  * both sqrt() and divide operation.
  */
-static cobalt_time_t cobalt_control(cobalt_time_t t,
-				    cobalt_time_t interval,
-				    u32 rec_inv_sqrt)
+static ktime_t cobalt_control(ktime_t t,
+			      u64 interval,
+			      u32 rec_inv_sqrt)
 {
-	return t + reciprocal_scale(interval, rec_inv_sqrt);
+	return ktime_add_ns(t, reciprocal_scale(interval,
+						rec_inv_sqrt));
 }
 
 /* Call this when a packet had to be dropped due to queue overflow.  Returns
@@ -388,11 +454,11 @@ static cobalt_time_t cobalt_control(cobalt_time_t t,
  */
 static bool cobalt_queue_full(struct cobalt_vars *vars,
 			      struct cobalt_params *p,
-			      cobalt_time_t now)
+			      ktime_t now)
 {
 	bool up = false;
 
-	if ((now - vars->blue_timer) > p->target) {
+	if (ktime_sub(now, vars->blue_timer) > p->target) {
 		up = !vars->p_drop;
 		vars->p_drop += p->p_inc;
 		if (vars->p_drop < p->p_inc)
@@ -412,11 +478,11 @@ static bool cobalt_queue_full(struct cobalt_vars *vars,
  */
 static bool cobalt_queue_empty(struct cobalt_vars *vars,
 			       struct cobalt_params *p,
-			       cobalt_time_t now)
+			       ktime_t now)
 {
 	bool down = false;
 
-	if (vars->p_drop && (now - vars->blue_timer) > p->target) {
+	if (vars->p_drop && ktime_sub(now, vars->blue_timer) > p->target) {
 		if (vars->p_drop < p->p_dec)
 			vars->p_drop = 0;
 		else
@@ -426,7 +492,7 @@ static bool cobalt_queue_empty(struct cobalt_vars *vars,
 	}
 	vars->dropping = false;
 
-	if (vars->count && (now - vars->drop_next) >= 0) {
+	if (vars->count && ktime_sub(now, vars->drop_next) >= 0) {
 		vars->count--;
 		cobalt_invsqrt(vars);
 		vars->drop_next = cobalt_control(vars->drop_next,
@@ -442,12 +508,13 @@ static bool cobalt_queue_empty(struct cobalt_vars *vars,
  */
 static bool cobalt_should_drop(struct cobalt_vars *vars,
 			       struct cobalt_params *p,
-			       cobalt_time_t now,
+			       ktime_t now,
 			       struct sk_buff *skb,
 			       u32 bulk_flows)
 {
 	bool next_due, over_target, drop = false;
-	cobalt_tdiff_t sojourn, schedule;
+	ktime_t schedule;
+	u64 sojourn;
 
 /* The 'schedule' variable records, in its sign, whether 'now' is before or
  * after 'drop_next'.  This allows 'drop_next' to be updated before the next
@@ -464,8 +531,8 @@ static bool cobalt_should_drop(struct cobalt_vars *vars,
  * as possible to 1.0 in fixed-point.
  */
 
-	sojourn = now - cobalt_get_enqueue_time(skb);
-	schedule = now - vars->drop_next;
+	sojourn = ktime_to_ns(ktime_sub(now, cobalt_get_enqueue_time(skb)));
+	schedule = ktime_sub(now, vars->drop_next);
 	over_target = sojourn > p->target &&
 		      sojourn > p->mtu_time * bulk_flows * 2 &&
 		      sojourn > p->mtu_time * 4;
@@ -497,7 +564,7 @@ static bool cobalt_should_drop(struct cobalt_vars *vars,
 		vars->drop_next = cobalt_control(vars->drop_next,
 						 p->interval,
 						 vars->rec_inv_sqrt);
-		schedule = now - vars->drop_next;
+		schedule = ktime_sub(now, vars->drop_next);
 	} else {
 		while (next_due) {
 			vars->count--;
@@ -505,7 +572,7 @@ static bool cobalt_should_drop(struct cobalt_vars *vars,
 			vars->drop_next = cobalt_control(vars->drop_next,
 							 p->interval,
 							 vars->rec_inv_sqrt);
-			schedule = now - vars->drop_next;
+			schedule = ktime_sub(now, vars->drop_next);
 			next_due = vars->count && schedule >= 0;
 		}
 	}
@@ -516,7 +583,7 @@ static bool cobalt_should_drop(struct cobalt_vars *vars,
 
 	/* Overload the drop_next field as an activity timeout */
 	if (!vars->count)
-		vars->drop_next = now + p->interval;
+		vars->drop_next = ktime_add_ns(now, p->interval);
 	else if (schedule > 0 && !drop)
 		vars->drop_next = now;
 
@@ -1078,8 +1145,7 @@ found:
 	return elig_ack;
 }
 
-static cobalt_time_t cake_ewma(cobalt_time_t avg, cobalt_time_t sample,
-			       u32 shift)
+static u64 cake_ewma(u64 avg, u64 sample, u32 shift)
 {
 	avg -= avg >> shift;
 	avg += sample >> shift;
@@ -1243,7 +1309,7 @@ static void cake_heapify_up(struct cake_sched_data *q, u16 i)
 static int cake_advance_shaper(struct cake_sched_data *q,
 			       struct cake_tin_data *b,
 			       struct sk_buff *skb,
-			       u64 now, bool drop)
+			       ktime_t now, bool drop)
 {
 	u32 len = get_cobalt_cb(skb)->adjusted_len;
 
@@ -1251,19 +1317,24 @@ static int cake_advance_shaper(struct cake_sched_data *q,
 	 * and to the global shaper.
 	 */
 	if (q->rate_ns) {
-		s64 tdiff1 = b->tin_time_next_packet - now;
-		s64 tdiff2 = (len * b->tin_rate_ns) >> b->tin_rate_shft;
-		s64 tdiff3 = (len * q->rate_ns) >> q->rate_shft;
-		s64 tdiff4 = tdiff3 + (tdiff3 >> 1);
+		u64 tin_dur = (len * b->tin_rate_ns) >> b->tin_rate_shft;
+		u64 global_dur = (len * q->rate_ns) >> q->rate_shft;
+		u64 failsafe_dur = global_dur + (global_dur >> 1);
 
-		if (tdiff1 < 0)
-			b->tin_time_next_packet += tdiff2;
-		else if (tdiff1 < tdiff2)
-			b->tin_time_next_packet = now + tdiff2;
+		if (ktime_before(b->time_next_packet, now))
+			b->time_next_packet = ktime_add_ns(b->time_next_packet,
+							   tin_dur);
 
-		q->time_next_packet += tdiff3;
+		else if (ktime_before(b->time_next_packet,
+				      ktime_add_ns(now, tin_dur)))
+			b->time_next_packet = ktime_add_ns(now, tin_dur);
+
+		q->time_next_packet = ktime_add_ns(q->time_next_packet,
+						   global_dur);
 		if (!drop)
-			q->failsafe_next_packet += tdiff4;
+			q->failsafe_next_packet = \
+				ktime_add_ns(q->failsafe_next_packet,
+					     failsafe_dur);
 	}
 	return len;
 }
@@ -1275,7 +1346,7 @@ static unsigned int cake_drop(struct Qdisc *sch, struct sk_buff **to_free)
 #endif
 {
 	struct cake_sched_data *q = qdisc_priv(sch);
-	u64 now = cobalt_get_time();
+	ktime_t now = ktime_get();
 	u32 idx = 0, tin = 0, len;
 	struct cake_heap_entry qq;
 	struct cake_tin_data *b;
@@ -1383,8 +1454,8 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 {
 	struct cake_sched_data *q = qdisc_priv(sch);
 	int len = qdisc_pkt_len(skb);
-	u64 now = cobalt_get_time();
 	struct sk_buff *ack = NULL;
+	ktime_t now = ktime_get();
 	struct cake_tin_data *b;
 	struct cake_flow *flow;
 	u32 idx, tin;
@@ -1410,18 +1481,20 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 
 	/* ensure shaper state isn't stale */
 	if (!b->tin_backlog) {
-		if (b->tin_time_next_packet < now)
-			b->tin_time_next_packet = now;
+		if (ktime_before(b->time_next_packet, now))
+			b->time_next_packet = now;
 
 		if (!sch->q.qlen) {
-			if (q->time_next_packet < now) {
+			if (ktime_before(q->time_next_packet, now)) {
 				q->failsafe_next_packet = now;
 				q->time_next_packet = now;
-			} else if (q->time_next_packet > now && q->failsafe_next_packet > now) {
-				u64 next = min(q->time_next_packet,
-					       q->failsafe_next_packet);
+			} else if (ktime_after(q->time_next_packet, now) &&
+				   ktime_after(q->failsafe_next_packet, now)) {
+				ktime_t next = min(q->time_next_packet,
+						   q->failsafe_next_packet);
 				sch->qstats.overlimits++;
-				qdisc_watchdog_schedule_ns(&q->watchdog, next);
+				qdisc_watchdog_schedule_ns(&q->watchdog,
+							   ktime_to_ns(next));
 			}
 		}
 	}
@@ -1505,20 +1578,25 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 
 	/* incoming bandwidth capacity estimate */
 	if (q->rate_flags & CAKE_FLAG_AUTORATE_INGRESS) {
-		u64 packet_interval = now - q->last_packet_time;
+		u64 packet_interval = \
+			ktime_to_ns(ktime_sub(now, q->last_packet_time));
 
 		if (packet_interval > NSEC_PER_SEC)
 			packet_interval = NSEC_PER_SEC;
 
 		/* filter out short-term bursts, eg. wifi aggregation */
-		q->avg_packet_interval = cake_ewma(q->avg_packet_interval,
-						   packet_interval,
-			packet_interval > q->avg_packet_interval ? 2 : 8);
+		q->avg_packet_interval = \
+			cake_ewma(q->avg_packet_interval,
+				  packet_interval,
+				  (packet_interval > q->avg_packet_interval ?
+					  2 : 8));
 
 		q->last_packet_time = now;
 
 		if (packet_interval > q->avg_packet_interval) {
-			u64 window_interval = now - q->avg_window_begin;
+			u64 window_interval = \
+				ktime_to_ns(ktime_sub(now,
+						      q->avg_window_begin));
 			u64 b = q->avg_window_bytes * (u64)NSEC_PER_SEC;
 
 			do_div(b, window_interval);
@@ -1528,7 +1606,9 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 			q->avg_window_bytes = 0;
 			q->avg_window_begin = now;
 
-			if (now - q->last_reconfig_time > (NSEC_PER_SEC / 4)) {
+			if (ktime_after(now,
+					ktime_add_ms(q->last_reconfig_time,
+						     250))) {
 				q->rate_bps = (q->avg_peak_bandwidth * 15) >> 4;
 				cake_reconfigure(sch);
 			}
@@ -1628,13 +1708,13 @@ static struct sk_buff *cake_dequeue(struct Qdisc *sch)
 	struct cake_sched_data *q = qdisc_priv(sch);
 	struct cake_tin_data *b = &q->tins[q->cur_tin];
 	struct cake_host *srchost, *dsthost;
-	cobalt_time_t now = ktime_get_ns();
+	ktime_t now = ktime_get();
 	struct cake_flow *flow;
 	struct list_head *head;
 	bool first_flow = true;
-	cobalt_time_t delay;
 	struct sk_buff *skb;
 	u16 host_load;
+	u64 delay;
 	u32 len;
 
 begin:
@@ -1642,10 +1722,12 @@ begin:
 		return NULL;
 
 	/* global hard shaper */
-	if (q->time_next_packet > now && q->failsafe_next_packet > now) {
-		u64 next = min(q->time_next_packet, q->failsafe_next_packet);
+	if (ktime_after(q->time_next_packet, now) &&
+	    ktime_after(q->failsafe_next_packet, now)) {
+		ktime_t next = min(q->time_next_packet,
+				   q->failsafe_next_packet);
 		sch->qstats.overlimits++;
-		qdisc_watchdog_schedule_ns(&q->watchdog, next);
+		qdisc_watchdog_schedule_ns(&q->watchdog, ktime_to_ns(next));
 		return NULL;
 	}
 
@@ -1671,16 +1753,18 @@ begin:
 		 * - Highest-priority tin with queue and meeting schedule, or
 		 * - The earliest-scheduled tin with queue.
 		 */
-		s64 best_time = 0xFFFFFFFFFFFFUL;
+		ktime_t best_time = KTIME_MAX;
 		int tin, best_tin = 0;
 
 		for (tin = 0; tin < q->tin_cnt; tin++) {
 			b = q->tins + tin;
 			if ((b->sparse_flow_count + b->bulk_flow_count) > 0) {
-				s64 tdiff = b->tin_time_next_packet - now;
+				ktime_t time_to_pkt = \
+					ktime_sub(b->time_next_packet, now);
 
-				if (tdiff <= 0 || tdiff <= best_time) {
-					best_time = tdiff;
+				if (ktime_compare(time_to_pkt, 0) <= 0 ||
+				    ktime_compare(time_to_pkt, best_time) <= 0) {
+					best_time = time_to_pkt;
 					best_tin = tin;
 				}
 			}
@@ -1758,7 +1842,7 @@ retry:
 				b->unresponsive_flow_count--;
 
 			if (flow->cvars.p_drop || flow->cvars.count ||
-			    now < flow->cvars.drop_next) {
+			    ktime_before(now, flow->cvars.drop_next)) {
 				/* keep in the flowchain until the state has
 				 * decayed to rest
 				 */
@@ -1821,7 +1905,7 @@ retry:
 	qdisc_bstats_update(sch, skb);
 
 	/* collect delay stats */
-	delay = now - cobalt_get_enqueue_time(skb);
+	delay = ktime_to_ns(ktime_sub(now, cobalt_get_enqueue_time(skb)));
 	b->avge_delay = cake_ewma(b->avge_delay, delay, 8);
 	b->peak_delay = cake_ewma(b->peak_delay, delay,
 				  delay > b->peak_delay ? 2 : 8);
@@ -1832,16 +1916,20 @@ retry:
 	flow->deficit -= len;
 	b->tin_deficit -= len;
 
-	if (q->time_next_packet > now && sch->q.qlen) {
-		u64 next = min(q->time_next_packet, q->failsafe_next_packet);
-		qdisc_watchdog_schedule_ns(&q->watchdog, next);
+	if (ktime_after(q->time_next_packet, now) && sch->q.qlen) {
+		ktime_t next = min(q->time_next_packet,
+				   q->failsafe_next_packet);
+		qdisc_watchdog_schedule_ns(&q->watchdog, ktime_to_ns(next));
 	} else if (!sch->q.qlen) {
 		int i;
 
 		for (i = 0; i < q->tin_cnt; i++) {
 			if (q->tins[i].decaying_flow_count) {
-				u64 next = now + q->tins[i].cparams.target;
-				qdisc_watchdog_schedule_ns(&q->watchdog, next);
+				ktime_t next = \
+					ktime_add_ns(now,
+						     q->tins[i].cparams.target);
+				qdisc_watchdog_schedule_ns(&q->watchdog,
+							   ktime_to_ns(next));
 				break;
 			}
 		}
@@ -1880,14 +1968,14 @@ static const struct nla_policy cake_policy[TCA_CAKE_MAX + 1] = {
 };
 
 static void cake_set_rate(struct cake_tin_data *b, u64 rate, u32 mtu,
-			  cobalt_time_t ns_target, cobalt_time_t rtt_est_ns)
+			  u64 target_ns, u64 rtt_est_ns)
 {
 	/* convert byte-rate into time-per-byte
 	 * so it will always unwedge in reasonable time.
 	 */
 	static const u64 MIN_RATE = 64;
-	cobalt_time_t byte_target_ns;
 	u32 byte_target = mtu;
+	u64 byte_target_ns;
 	u8  rate_shft = 0;
 	u64 rate_ns = 0;
 
@@ -1909,10 +1997,10 @@ static void cake_set_rate(struct cake_tin_data *b, u64 rate, u32 mtu,
 
 	byte_target_ns = (byte_target * rate_ns) >> rate_shft;
 
-	b->cparams.target = max((byte_target_ns*3)/2, ns_target);
+	b->cparams.target = max((byte_target_ns*3)/2, target_ns);
 	b->cparams.interval = max(rtt_est_ns +
-				     b->cparams.target - ns_target,
-				     b->cparams.target * 2);
+			            b->cparams.target - target_ns,
+				  b->cparams.target * 2);
 	b->cparams.mtu_time = byte_target_ns;
 	b->cparams.p_inc = 1 << 24; /* 1/256 */
 	b->cparams.p_dec = 1 << 20; /* 1/4096 */
@@ -1930,7 +2018,8 @@ static int cake_config_besteffort(struct Qdisc *sch)
 	q->tin_index = besteffort;
 	q->tin_order = normal_order;
 
-	cake_set_rate(b, rate, mtu, US2TIME(q->target), US2TIME(q->interval));
+	cake_set_rate(b, rate, mtu,
+		      us_to_ns(q->target), us_to_ns(q->interval));
 	b->tin_quantum_band = 65535;
 	b->tin_quantum_prio = 65535;
 
@@ -1954,8 +2043,8 @@ static int cake_config_precedence(struct Qdisc *sch)
 	for (i = 0; i < q->tin_cnt; i++) {
 		struct cake_tin_data *b = &q->tins[i];
 
-		cake_set_rate(b, rate, mtu, US2TIME(q->target),
-			      US2TIME(q->interval));
+		cake_set_rate(b, rate, mtu, us_to_ns(q->target),
+			      us_to_ns(q->interval));
 
 		b->tin_quantum_prio = max_t(u16, 1U, quantum1);
 		b->tin_quantum_band = max_t(u16, 1U, quantum2);
@@ -2051,8 +2140,8 @@ static int cake_config_diffserv8(struct Qdisc *sch)
 	for (i = 0; i < q->tin_cnt; i++) {
 		struct cake_tin_data *b = &q->tins[i];
 
-		cake_set_rate(b, rate, mtu, US2TIME(q->target),
-			      US2TIME(q->interval));
+		cake_set_rate(b, rate, mtu, us_to_ns(q->target),
+			      us_to_ns(q->interval));
 
 		b->tin_quantum_prio = max_t(u16, 1U, quantum1);
 		b->tin_quantum_band = max_t(u16, 1U, quantum2);
@@ -2096,13 +2185,13 @@ static int cake_config_diffserv4(struct Qdisc *sch)
 
 	/* class characteristics */
 	cake_set_rate(&q->tins[0], rate, mtu,
-		      US2TIME(q->target), US2TIME(q->interval));
+		      us_to_ns(q->target), us_to_ns(q->interval));
 	cake_set_rate(&q->tins[1], rate >> 4, mtu,
-		      US2TIME(q->target), US2TIME(q->interval));
+		      us_to_ns(q->target), us_to_ns(q->interval));
 	cake_set_rate(&q->tins[2], rate >> 1, mtu,
-		      US2TIME(q->target), US2TIME(q->interval));
+		      us_to_ns(q->target), us_to_ns(q->interval));
 	cake_set_rate(&q->tins[3], rate >> 2, mtu,
-		      US2TIME(q->target), US2TIME(q->interval));
+		      us_to_ns(q->target), us_to_ns(q->interval));
 
 	/* priority weights */
 	q->tins[0].tin_quantum_prio = quantum;
@@ -2139,11 +2228,11 @@ static int cake_config_diffserv3(struct Qdisc *sch)
 
 	/* class characteristics */
 	cake_set_rate(&q->tins[0], rate, mtu,
-		      US2TIME(q->target), US2TIME(q->interval));
+		      us_to_ns(q->target), us_to_ns(q->interval));
 	cake_set_rate(&q->tins[1], rate >> 4, mtu,
-		      US2TIME(q->target), US2TIME(q->interval));
+		      us_to_ns(q->target), us_to_ns(q->interval));
 	cake_set_rate(&q->tins[2], rate >> 2, mtu,
-		      US2TIME(q->target), US2TIME(q->interval));
+		      us_to_ns(q->target), us_to_ns(q->interval));
 
 	/* priority weights */
 	q->tins[0].tin_quantum_prio = quantum;
@@ -2545,9 +2634,10 @@ static int cake_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 			goto nla_put_failure;
 
 		PUT_TSTAT_U64(THRESHOLD_RATE64, b->tin_rate_bps);
-		PUT_TSTAT_U32(TARGET_US, cobalt_time_to_us(b->cparams.target));
+		PUT_TSTAT_U32(TARGET_US,
+			      ktime_to_us(ns_to_ktime(b->cparams.target)));
 		PUT_TSTAT_U32(INTERVAL_US,
-			      cobalt_time_to_us(b->cparams.interval));
+			      ktime_to_us(ns_to_ktime(b->cparams.interval)));
 
 		PUT_TSTAT_U32(SENT_PACKETS, b->packets);
 		PUT_TSTAT_U64(SENT_BYTES64, b->bytes);
@@ -2556,16 +2646,19 @@ static int cake_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 		PUT_TSTAT_U64(BACKLOG_BYTES64, b->tin_backlog);
 		PUT_TSTAT_U32(ACKS_DROPPED_PACKETS, b->ack_drops);
 
-		PUT_TSTAT_U32(PEAK_DELAY_US, cobalt_time_to_us(b->peak_delay));
-		PUT_TSTAT_U32(AVG_DELAY_US, cobalt_time_to_us(b->avge_delay));
-		PUT_TSTAT_U32(BASE_DELAY_US, cobalt_time_to_us(b->base_delay));
+		PUT_TSTAT_U32(PEAK_DELAY_US,
+			      ktime_to_us(ns_to_ktime(b->peak_delay)));
+		PUT_TSTAT_U32(AVG_DELAY_US,
+			      ktime_to_us(ns_to_ktime(b->avge_delay)));
+		PUT_TSTAT_U32(BASE_DELAY_US,
+			      ktime_to_us(ns_to_ktime(b->base_delay)));
 
 		PUT_TSTAT_U32(WAY_INDIRECT_HITS, b->way_hits);
 		PUT_TSTAT_U32(WAY_MISSES, b->way_misses);
 		PUT_TSTAT_U32(WAY_COLLISIONS, b->way_collisions);
 
 		PUT_TSTAT_U32(SPARSE_FLOWS, b->sparse_flow_count +
-					   b->decaying_flow_count);
+					    b->decaying_flow_count);
 		PUT_TSTAT_U32(BULK_FLOWS, b->bulk_flow_count);
 		PUT_TSTAT_U32(UNRESPONSIVE_FLOWS, b->unresponsive_flow_count);
 		PUT_TSTAT_U32(MAX_SKBLEN, b->max_skblen);
