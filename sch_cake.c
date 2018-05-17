@@ -458,7 +458,7 @@ static bool cobalt_queue_full(struct cobalt_vars *vars,
 {
 	bool up = false;
 
-	if (ktime_sub(now, vars->blue_timer) > p->target) {
+	if (ktime_to_ns(ktime_sub(now, vars->blue_timer)) > p->target) {
 		up = !vars->p_drop;
 		vars->p_drop += p->p_inc;
 		if (vars->p_drop < p->p_inc)
@@ -482,7 +482,8 @@ static bool cobalt_queue_empty(struct cobalt_vars *vars,
 {
 	bool down = false;
 
-	if (vars->p_drop && ktime_sub(now, vars->blue_timer) > p->target) {
+	if (vars->p_drop &&
+	    ktime_to_ns(ktime_sub(now, vars->blue_timer)) > p->target) {
 		if (vars->p_drop < p->p_dec)
 			vars->p_drop = 0;
 		else
@@ -492,7 +493,7 @@ static bool cobalt_queue_empty(struct cobalt_vars *vars,
 	}
 	vars->dropping = false;
 
-	if (vars->count && ktime_sub(now, vars->drop_next) >= 0) {
+	if (vars->count && ktime_to_ns(ktime_sub(now, vars->drop_next)) >= 0) {
 		vars->count--;
 		cobalt_invsqrt(vars);
 		vars->drop_next = cobalt_control(vars->drop_next,
@@ -536,7 +537,7 @@ static bool cobalt_should_drop(struct cobalt_vars *vars,
 	over_target = sojourn > p->target &&
 		      sojourn > p->mtu_time * bulk_flows * 2 &&
 		      sojourn > p->mtu_time * 4;
-	next_due = vars->count && schedule >= 0;
+	next_due = vars->count && ktime_to_ns(schedule) >= 0;
 
 	vars->ecn_marked = false;
 
@@ -573,7 +574,7 @@ static bool cobalt_should_drop(struct cobalt_vars *vars,
 							 p->interval,
 							 vars->rec_inv_sqrt);
 			schedule = ktime_sub(now, vars->drop_next);
-			next_due = vars->count && schedule >= 0;
+			next_due = vars->count && ktime_to_ns(schedule) >= 0;
 		}
 	}
 
@@ -584,7 +585,7 @@ static bool cobalt_should_drop(struct cobalt_vars *vars,
 	/* Overload the drop_next field as an activity timeout */
 	if (!vars->count)
 		vars->drop_next = ktime_add_ns(now, p->interval);
-	else if (schedule > 0 && !drop)
+	else if (ktime_to_ns(schedule) > 0 && !drop)
 		vars->drop_next = now;
 
 	return drop;
@@ -1490,11 +1491,12 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 				q->time_next_packet = now;
 			} else if (ktime_after(q->time_next_packet, now) &&
 				   ktime_after(q->failsafe_next_packet, now)) {
-				ktime_t next = min(q->time_next_packet,
-						   q->failsafe_next_packet);
+				u64 next = \
+					min(ktime_to_ns(q->time_next_packet),
+					    ktime_to_ns(
+						   q->failsafe_next_packet));
 				sch->qstats.overlimits++;
-				qdisc_watchdog_schedule_ns(&q->watchdog,
-							   ktime_to_ns(next));
+				qdisc_watchdog_schedule_ns(&q->watchdog, next);
 			}
 		}
 	}
@@ -1724,10 +1726,10 @@ begin:
 	/* global hard shaper */
 	if (ktime_after(q->time_next_packet, now) &&
 	    ktime_after(q->failsafe_next_packet, now)) {
-		ktime_t next = min(q->time_next_packet,
-				   q->failsafe_next_packet);
+		u64 next = min(ktime_to_ns(q->time_next_packet),
+			       ktime_to_ns(q->failsafe_next_packet));
 		sch->qstats.overlimits++;
-		qdisc_watchdog_schedule_ns(&q->watchdog, ktime_to_ns(next));
+		qdisc_watchdog_schedule_ns(&q->watchdog, next);
 		return NULL;
 	}
 
@@ -1753,7 +1755,7 @@ begin:
 		 * - Highest-priority tin with queue and meeting schedule, or
 		 * - The earliest-scheduled tin with queue.
 		 */
-		ktime_t best_time = KTIME_MAX;
+		ktime_t best_time = ns_to_ktime(KTIME_MAX);
 		int tin, best_tin = 0;
 
 		for (tin = 0; tin < q->tin_cnt; tin++) {
@@ -1762,8 +1764,10 @@ begin:
 				ktime_t time_to_pkt = \
 					ktime_sub(b->time_next_packet, now);
 
-				if (ktime_compare(time_to_pkt, 0) <= 0 ||
-				    ktime_compare(time_to_pkt, best_time) <= 0) {
+				if (ktime_compare(time_to_pkt,
+						  ns_to_ktime(0)) <= 0 ||
+				    ktime_compare(time_to_pkt,
+					          best_time) <= 0) {
 					best_time = time_to_pkt;
 					best_tin = tin;
 				}
@@ -1917,9 +1921,9 @@ retry:
 	b->tin_deficit -= len;
 
 	if (ktime_after(q->time_next_packet, now) && sch->q.qlen) {
-		ktime_t next = min(q->time_next_packet,
-				   q->failsafe_next_packet);
-		qdisc_watchdog_schedule_ns(&q->watchdog, ktime_to_ns(next));
+		u64 next = min(ktime_to_ns(q->time_next_packet),
+			       ktime_to_ns(q->failsafe_next_packet));
+		qdisc_watchdog_schedule_ns(&q->watchdog, next);
 	} else if (!sch->q.qlen) {
 		int i;
 
