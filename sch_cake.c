@@ -53,7 +53,6 @@
 #include <linux/module.h>
 #include <linux/types.h>
 #include <linux/kernel.h>
-#include <linux/ktime.h>
 #include <linux/jiffies.h>
 #include <linux/string.h>
 #include <linux/in.h>
@@ -85,46 +84,7 @@
 #define CAKE_FLOW_NAT_FLAG 64
 #define CAKE_SPLIT_GSO_THRESHOLD (125000000) /* 1Gbps */
 
-typedef u64 cobalt_time_t;
-typedef s64 cobalt_tdiff_t;
-
-/**
- * struct cobalt_params - contains codel and blue parameters
- * @interval:	codel initial drop rate
- * @target:     maximum persistent sojourn time & blue update rate
- * @mtu_time:   serialisation delay of maximum-size packet
- * @p_inc:      increment of blue drop probability (0.32 fxp)
- * @p_dec:      decrement of blue drop probability (0.32 fxp)
- */
-struct cobalt_params {
-	cobalt_time_t	interval;
-	cobalt_time_t	target;
-	cobalt_time_t	mtu_time;
-	u32		p_inc;
-	u32		p_dec;
-};
-
-/* struct cobalt_vars - contains codel and blue variables
- * @count:	  codel dropping frequency
- * @rec_inv_sqrt: reciprocal value of sqrt(count) >> 1
- * @drop_next:    time to drop next packet, or when we dropped last
- * @blue_timer:	  Blue time to next drop
- * @p_drop:       BLUE drop probability (0.32 fxp)
- * @dropping:     set if in dropping state
- * @ecn_marked:   set if marked
- */
-struct cobalt_vars {
-	u32		count;
-	u32		rec_inv_sqrt;
-	cobalt_time_t	drop_next;
-	cobalt_time_t	blue_timer;
-	u32     p_drop;
-	bool	dropping;
-	bool    ecn_marked;
-};
-
-/**
- * struct cobalt_params - contains codel and blue parameters
+/* struct cobalt_params - contains codel and blue parameters
  * @interval:	codel initial drop rate
  * @target:     maximum persistent sojourn time & blue update rate
  * @mtu_time:   serialisation delay of maximum-size packet
@@ -140,13 +100,13 @@ struct cobalt_params {
 };
 
 /* struct cobalt_vars - contains codel and blue variables
- * @count:	  codel dropping frequency
- * @rec_inv_sqrt: reciprocal value of sqrt(count) >> 1
- * @drop_next:    time to drop next packet, or when we dropped last
- * @blue_timer:	  Blue time to next drop
- * @p_drop:       BLUE drop probability (0.32 fxp)
- * @dropping:     set if in dropping state
- * @ecn_marked:   set if marked
+ * @count:		codel dropping frequency
+ * @rec_inv_sqrt:	reciprocal value of sqrt(count) >> 1
+ * @drop_next:		time to drop next packet, or when we dropped last
+ * @blue_timer:		Blue time to next drop
+ * @p_drop:		BLUE drop probability (0.32 fxp)
+ * @dropping:		set if in dropping state
+ * @ecn_marked:		set if marked
  */
 struct cobalt_vars {
 	u32	count;
@@ -289,11 +249,11 @@ struct cake_sched_data {
 	ktime_t		last_reconfig_time;
 
 	/* packet length stats */
-	u32 avg_netoff;
-	u16 max_netlen;
-	u16 max_adjlen;
-	u16 min_netlen;
-	u16 min_adjlen;
+	u32		avg_netoff;
+	u16		max_netlen;
+	u16		max_adjlen;
+	u16		min_netlen;
+	u16		min_adjlen;
 };
 
 enum {
@@ -303,6 +263,12 @@ enum {
 	CAKE_FLAG_WASH		   = BIT(3),
 	CAKE_FLAG_SPLIT_GSO	   = BIT(4)
 };
+
+/* COBALT operates the Codel and BLUE algorithms in parallel, in order to
+ * obtain the best features of each.  Codel is excellent on flows which
+ * respond to congestion signals in a TCP-like way.  BLUE is more effective on
+ * unresponsive flows.
+ */
 
 struct cobalt_skb_cb {
 	ktime_t enqueue_time;
@@ -314,19 +280,19 @@ static u64 us_to_ns(u64 us)
 	return us * NSEC_PER_USEC;
 }
 
-static inline struct cobalt_skb_cb *get_cobalt_cb(const struct sk_buff *skb)
+static struct cobalt_skb_cb *get_cobalt_cb(const struct sk_buff *skb)
 {
 	qdisc_cb_private_validate(skb, sizeof(struct cobalt_skb_cb));
 	return (struct cobalt_skb_cb *)qdisc_skb_cb(skb)->data;
 }
 
-static inline ktime_t cobalt_get_enqueue_time(const struct sk_buff *skb)
+static ktime_t cobalt_get_enqueue_time(const struct sk_buff *skb)
 {
 	return get_cobalt_cb(skb)->enqueue_time;
 }
 
-static inline void cobalt_set_enqueue_time(struct sk_buff *skb,
-					   ktime_t now)
+static void cobalt_set_enqueue_time(struct sk_buff *skb,
+				    ktime_t now)
 {
 	get_cobalt_cb(skb)->enqueue_time = now;
 }
@@ -889,7 +855,6 @@ static u32 cake_classify(struct Qdisc *sch, struct cake_tin_data *t,
 	return 0;
 }
 
-
 /* helper functions : might be changed when/if skb use a standard list_head */
 /* remove one skb from head of slot queue */
 
@@ -1222,13 +1187,13 @@ static u32 cake_overhead(struct cake_sched_data *q, const struct sk_buff *skb)
 		struct udphdr _udphdr;
 
 		if (skb_header_pointer(skb, skb_transport_offset(skb),
-					sizeof(_udphdr), &_udphdr))
+				       sizeof(_udphdr), &_udphdr))
 			hdr_len += sizeof(struct udphdr);
 	}
 
 	if (unlikely(shinfo->gso_type & SKB_GSO_DODGY))
 		segs = DIV_ROUND_UP(skb->len - hdr_len,
-				shinfo->gso_size);
+				    shinfo->gso_size);
 	else
 		segs = shinfo->gso_segs;
 
@@ -1728,6 +1693,7 @@ begin:
 	    ktime_after(q->failsafe_next_packet, now)) {
 		ktime_t next = min(q->time_next_packet,
 				   q->failsafe_next_packet);
+
 		sch->qstats.overlimits++;
 		qdisc_watchdog_schedule_ns(&q->watchdog, ktime_to_ns(next));
 		return NULL;
@@ -1919,6 +1885,7 @@ retry:
 	if (ktime_after(q->time_next_packet, now) && sch->q.qlen) {
 		ktime_t next = min(q->time_next_packet,
 				   q->failsafe_next_packet);
+
 		qdisc_watchdog_schedule_ns(&q->watchdog, ktime_to_ns(next));
 	} else if (!sch->q.qlen) {
 		int i;
@@ -1928,6 +1895,7 @@ retry:
 				ktime_t next = \
 					ktime_add_ns(now,
 						     q->tins[i].cparams.target);
+
 				qdisc_watchdog_schedule_ns(&q->watchdog,
 							   ktime_to_ns(next));
 				break;
@@ -1997,10 +1965,10 @@ static void cake_set_rate(struct cake_tin_data *b, u64 rate, u32 mtu,
 
 	byte_target_ns = (byte_target * rate_ns) >> rate_shft;
 
-	b->cparams.target = max((byte_target_ns*3)/2, target_ns);
+	b->cparams.target = max((byte_target_ns * 3) / 2, target_ns);
 	b->cparams.interval = max(rtt_est_ns +
-			            b->cparams.target - target_ns,
-				  b->cparams.target * 2);
+				     b->cparams.target - target_ns,
+				     b->cparams.target * 2);
 	b->cparams.mtu_time = byte_target_ns;
 	b->cparams.p_inc = 1 << 24; /* 1/256 */
 	b->cparams.p_dec = 1 << 20; /* 1/4096 */
@@ -2458,7 +2426,7 @@ static int cake_init(struct Qdisc *sch, struct nlattr *opt,
 		quantum_div[i] = 65535 / i;
 
 	q->tins = kvzalloc(CAKE_MAX_TINS * sizeof(struct cake_tin_data),
-			GFP_KERNEL);
+			   GFP_KERNEL);
 	if (!q->tins)
 		goto nomem;
 
@@ -2533,7 +2501,8 @@ static int cake_dump(struct Qdisc *sch, struct sk_buff *skb)
 	if (nla_put_u32(skb, TCA_CAKE_ACK_FILTER, q->ack_filter))
 		goto nla_put_failure;
 
-	if (nla_put_u32(skb, TCA_CAKE_NAT, !!(q->flow_mode & CAKE_FLOW_NAT_FLAG)))
+	if (nla_put_u32(skb, TCA_CAKE_NAT,
+			!!(q->flow_mode & CAKE_FLOW_NAT_FLAG)))
 		goto nla_put_failure;
 
 	if (nla_put_u32(skb, TCA_CAKE_DIFFSERV_MODE, q->tin_mode))
@@ -2679,7 +2648,7 @@ static void cake_walk(struct Qdisc *sch, struct qdisc_walker *arg)
 }
 
 static unsigned long cake_bind(struct Qdisc *sch, unsigned long parent,
-			      u32 classid)
+			       u32 classid)
 {
 	return 0;
 }
@@ -2689,7 +2658,7 @@ static void cake_unbind(struct Qdisc *q, unsigned long cl)
 }
 
 static struct tcf_block *cake_tcf_block(struct Qdisc *sch, unsigned long cl,
-					    struct netlink_ext_ack *extack)
+					struct netlink_ext_ack *extack)
 {
 	struct cake_sched_data *q = qdisc_priv(sch);
 
