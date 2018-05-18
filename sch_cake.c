@@ -453,7 +453,7 @@ static bool cobalt_queue_full(struct cobalt_vars *vars,
 {
 	bool up = false;
 
-	if (ktime_sub(now, vars->blue_timer) > p->target) {
+	if (ktime_to_ns(ktime_sub(now, vars->blue_timer)) > p->target) {
 		up = !vars->p_drop;
 		vars->p_drop += p->p_inc;
 		if (vars->p_drop < p->p_inc)
@@ -477,7 +477,8 @@ static bool cobalt_queue_empty(struct cobalt_vars *vars,
 {
 	bool down = false;
 
-	if (vars->p_drop && ktime_sub(now, vars->blue_timer) > p->target) {
+	if (vars->p_drop &&
+	    ktime_to_ns(ktime_sub(now, vars->blue_timer)) > p->target) {
 		if (vars->p_drop < p->p_dec)
 			vars->p_drop = 0;
 		else
@@ -487,7 +488,7 @@ static bool cobalt_queue_empty(struct cobalt_vars *vars,
 	}
 	vars->dropping = false;
 
-	if (vars->count && ktime_sub(now, vars->drop_next) >= 0) {
+	if (vars->count && ktime_to_ns(ktime_sub(now, vars->drop_next)) >= 0) {
 		vars->count--;
 		cobalt_invsqrt(vars);
 		vars->drop_next = cobalt_control(vars->drop_next,
@@ -531,7 +532,7 @@ static bool cobalt_should_drop(struct cobalt_vars *vars,
 	over_target = sojourn > p->target &&
 		      sojourn > p->mtu_time * bulk_flows * 2 &&
 		      sojourn > p->mtu_time * 4;
-	next_due = vars->count && schedule >= 0;
+	next_due = vars->count && ktime_to_ns(schedule) >= 0;
 
 	vars->ecn_marked = false;
 
@@ -568,7 +569,7 @@ static bool cobalt_should_drop(struct cobalt_vars *vars,
 							 p->interval,
 							 vars->rec_inv_sqrt);
 			schedule = ktime_sub(now, vars->drop_next);
-			next_due = vars->count && schedule >= 0;
+			next_due = vars->count && ktime_to_ns(schedule) >= 0;
 		}
 	}
 
@@ -579,7 +580,7 @@ static bool cobalt_should_drop(struct cobalt_vars *vars,
 	/* Overload the drop_next field as an activity timeout */
 	if (!vars->count)
 		vars->drop_next = ktime_add_ns(now, p->interval);
-	else if (schedule > 0 && !drop)
+	else if (ktime_to_ns(schedule) > 0 && !drop)
 		vars->drop_next = now;
 
 	return drop;
@@ -995,13 +996,12 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 	struct sk_buff *elig_ack = NULL, *elig_ack_prev = NULL;
 	struct sk_buff *skb_check, *skb_prev = NULL;
 	const struct ipv6hdr *ipv6h, *ipv6h_check;
+	unsigned char _tcph[64], _tcph_check[64];
 	const struct tcphdr *tcph, *tcph_check;
 	const struct iphdr *iph, *iph_check;
 	struct ipv6hdr _iph, _iph_check;
 	const struct sk_buff *skb;
-	struct tcphdr _tcph_check;
 	int seglen, num_found = 0;
-	unsigned char _tcph[64]; /* need to hold maximum hdr size */
 
 	/* no other possible ACKs to filter */
 	if (flow->head == flow->tail)
@@ -1032,10 +1032,12 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 		tcph_check = cake_get_tcphdr(skb_check, &_tcph_check,
 					     sizeof(_tcph_check));
 
-		/* only TCP packets with matching 5-tuple are eligible */
+		/* only TCP packets with matching 5-tuple are eligible, and
+		 * never drop a SACK */
 		if (!tcph_check || iph->version != iph_check->version ||
 		    tcph_check->source != tcph->source ||
-		    tcph_check->dest != tcph->dest)
+		    tcph_check->dest != tcph->dest ||
+		    cake_tcph_is_sack(tcph_check))
 			continue;
 
 		if (iph_check->version == 4) {
@@ -1465,11 +1467,12 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 				q->time_next_packet = now;
 			} else if (ktime_after(q->time_next_packet, now) &&
 				   ktime_after(q->failsafe_next_packet, now)) {
-				ktime_t next = min(q->time_next_packet,
-						   q->failsafe_next_packet);
+				u64 next = \
+					min(ktime_to_ns(q->time_next_packet),
+					    ktime_to_ns(
+						   q->failsafe_next_packet));
 				sch->qstats.overlimits++;
-				qdisc_watchdog_schedule_ns(&q->watchdog,
-							   ktime_to_ns(next));
+				qdisc_watchdog_schedule_ns(&q->watchdog, next);
 			}
 		}
 	}
@@ -1693,11 +1696,10 @@ begin:
 	/* global hard shaper */
 	if (ktime_after(q->time_next_packet, now) &&
 	    ktime_after(q->failsafe_next_packet, now)) {
-		ktime_t next = min(q->time_next_packet,
-				   q->failsafe_next_packet);
-
+		u64 next = min(ktime_to_ns(q->time_next_packet),
+			       ktime_to_ns(q->failsafe_next_packet));
 		sch->qstats.overlimits++;
-		qdisc_watchdog_schedule_ns(&q->watchdog, ktime_to_ns(next));
+		qdisc_watchdog_schedule_ns(&q->watchdog, next);
 		return NULL;
 	}
 
@@ -1723,7 +1725,7 @@ begin:
 		 * - Highest-priority tin with queue and meeting schedule, or
 		 * - The earliest-scheduled tin with queue.
 		 */
-		ktime_t best_time = KTIME_MAX;
+		ktime_t best_time = ns_to_ktime(KTIME_MAX);
 		int tin, best_tin = 0;
 
 		for (tin = 0; tin < q->tin_cnt; tin++) {
@@ -1732,8 +1734,10 @@ begin:
 				ktime_t time_to_pkt = \
 					ktime_sub(b->time_next_packet, now);
 
-				if (ktime_compare(time_to_pkt, 0) <= 0 ||
-				    ktime_compare(time_to_pkt, best_time) <= 0) {
+				if (ktime_compare(time_to_pkt,
+						  ns_to_ktime(0)) <= 0 ||
+				    ktime_compare(time_to_pkt,
+					          best_time) <= 0) {
 					best_time = time_to_pkt;
 					best_tin = tin;
 				}
@@ -1886,10 +1890,9 @@ retry:
 	b->tin_deficit -= len;
 
 	if (ktime_after(q->time_next_packet, now) && sch->q.qlen) {
-		ktime_t next = min(q->time_next_packet,
-				   q->failsafe_next_packet);
-
-		qdisc_watchdog_schedule_ns(&q->watchdog, ktime_to_ns(next));
+		u64 next = min(ktime_to_ns(q->time_next_packet),
+			       ktime_to_ns(q->failsafe_next_packet));
+		qdisc_watchdog_schedule_ns(&q->watchdog, next);
 	} else if (!sch->q.qlen) {
 		int i;
 
@@ -1955,7 +1958,7 @@ static void cake_set_rate(struct cake_tin_data *b, u64 rate, u32 mtu,
 		b->flow_quantum = max(min(rate >> 12, 1514ULL), 300ULL);
 		rate_shft = 34;
 		rate_ns = ((u64)NSEC_PER_SEC) << rate_shft;
-		rate_ns /= max(MIN_RATE, rate);
+		rate_ns = div64_u64(rate_ns, max(MIN_RATE, rate));
 		while (!!(rate_ns >> 34)) {
 			rate_ns >>= 1;
 			rate_shft--;
@@ -2554,7 +2557,7 @@ static int cake_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 	} while (0)
 #define PUT_STAT_U64(attr, data) do {				       \
 		if (nla_put_u64_64bit(d->skb, TCA_CAKE_STATS_ ## attr, \
-					data, TCA_CAKE_TIN_STATS_PAD)) \
+					data, TCA_CAKE_STATS_PAD)) \
 			goto nla_put_failure;			       \
 	} while (0)
 
