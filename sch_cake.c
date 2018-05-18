@@ -132,6 +132,7 @@ struct cake_flow {
 	struct sk_buff	  *tail;
 	struct list_head  flowchain;
 	s32		  deficit;
+	u32		  dropped;
 	struct cobalt_vars cvars;
 	u16		  srchost; /* index into cake_host table */
 	u16		  dsthost;
@@ -1351,6 +1352,7 @@ static unsigned int cake_drop(struct Qdisc *sch, struct sk_buff **to_free)
 	sch->qstats.backlog -= len;
 	qdisc_tree_reduce_backlog(sch, 1, len);
 
+	flow->dropped++;
 	b->tin_dropped++;
 	sch->qstats.drops++;
 
@@ -1859,6 +1861,7 @@ retry:
 			flow->deficit -= len;
 			b->tin_deficit -= len;
 		}
+		flow->dropped++;
 		b->tin_dropped++;
 		qdisc_tree_reduce_backlog(sch, 1, qdisc_pkt_len(skb));
 		qdisc_qstats_drop(sch);
@@ -2643,10 +2646,6 @@ static unsigned long cake_find(struct Qdisc *sch, u32 classid)
 	return 0;
 }
 
-static void cake_walk(struct Qdisc *sch, struct qdisc_walker *arg)
-{
-}
-
 static unsigned long cake_bind(struct Qdisc *sch, unsigned long parent,
 			       u32 classid)
 {
@@ -2667,12 +2666,76 @@ static struct tcf_block *cake_tcf_block(struct Qdisc *sch, unsigned long cl,
 	return q->block;
 }
 
+static int cake_dump_class(struct Qdisc *sch, unsigned long cl,
+			   struct sk_buff *skb, struct tcmsg *tcm)
+{
+	tcm->tcm_handle |= TC_H_MIN(cl);
+	return 0;
+}
+
+static int cake_dump_class_stats(struct Qdisc *sch, unsigned long cl,
+				 struct gnet_dump *d)
+{
+	struct cake_sched_data *q = qdisc_priv(sch);
+	struct gnet_stats_queue qs = { 0 };
+	u32 idx = cl - 1;
+
+	if (idx < CAKE_QUEUES * q->tin_cnt) {
+		struct cake_tin_data *b = &q->tins[idx / CAKE_QUEUES];
+		const struct cake_flow *flow = &b->flows[idx % CAKE_QUEUES];
+		const struct sk_buff *skb;
+
+		if (flow->head) {
+			sch_tree_lock(sch);
+			skb = flow->head;
+			while (skb) {
+				qs.qlen++;
+				skb = skb->next;
+			}
+			sch_tree_unlock(sch);
+		}
+		qs.backlog = b->backlogs[idx % CAKE_QUEUES];
+		qs.drops = flow->dropped;
+	}
+	if (gnet_stats_copy_queue(d, NULL, &qs, qs.qlen) < 0)
+		return -1;
+	return 0;
+}
+
+static void cake_walk(struct Qdisc *sch, struct qdisc_walker *arg)
+{
+	struct cake_sched_data *q = qdisc_priv(sch);
+	unsigned int i, j;
+
+	if (arg->stop)
+		return;
+
+	for (i = 0; i < q->tin_cnt; i++) {
+		struct cake_tin_data *b = &q->tins[i];
+		for (j = 0; j < CAKE_QUEUES; j++) {
+			if (list_empty(&b->flows[j].flowchain) ||
+				arg->count < arg->skip) {
+				arg->count++;
+				continue;
+			}
+			if (arg->fn(sch, i * CAKE_QUEUES + j + 1, arg) < 0) {
+				arg->stop = 1;
+				break;
+			}
+			arg->count++;
+		}
+	}
+}
+
+
 static const struct Qdisc_class_ops cake_class_ops = {
 	.leaf		=	cake_leaf,
 	.find		=	cake_find,
 	.tcf_block	=	cake_tcf_block,
 	.bind_tcf	=	cake_bind,
 	.unbind_tcf	=	cake_unbind,
+	.dump		=	cake_dump_class,
+	.dump_stats	=	cake_dump_class_stats,
 	.walk		=	cake_walk,
 };
 
