@@ -2601,7 +2601,7 @@ static int cake_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 	} while (0)
 #define PUT_STAT_U64(attr, data) do {				       \
 		if (nla_put_u64_64bit(d->skb, TCA_CAKE_STATS_ ## attr, \
-					data, TCA_CAKE_TIN_STATS_PAD)) \
+					data, TCA_CAKE_STATS_PAD)) \
 			goto nla_put_failure;			       \
 	} while (0)
 
