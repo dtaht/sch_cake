@@ -1025,13 +1025,12 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 	struct sk_buff *elig_ack = NULL, *elig_ack_prev = NULL;
 	struct sk_buff *skb_check, *skb_prev = NULL;
 	const struct ipv6hdr *ipv6h, *ipv6h_check;
+	unsigned char _tcph[64], _tcph_check[64];
 	const struct tcphdr *tcph, *tcph_check;
 	const struct iphdr *iph, *iph_check;
 	struct ipv6hdr _iph, _iph_check;
 	const struct sk_buff *skb;
-	struct tcphdr _tcph_check;
 	int seglen, num_found = 0;
-	unsigned char _tcph[64]; /* need to hold maximum hdr size */
 
 	/* no other possible ACKs to filter */
 	if (flow->head == flow->tail)
@@ -1062,10 +1061,12 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 		tcph_check = cake_get_tcphdr(skb_check, &_tcph_check,
 					     sizeof(_tcph_check));
 
-		/* only TCP packets with matching 5-tuple are eligible */
+		/* only TCP packets with matching 5-tuple are eligible, and
+		 * never drop a SACK */
 		if (!tcph_check || iph->version != iph_check->version ||
 		    tcph_check->source != tcph->source ||
-		    tcph_check->dest != tcph->dest)
+		    tcph_check->dest != tcph->dest ||
+		    cake_tcph_is_sack(tcph_check))
 			continue;
 
 		if (iph_check->version == 4) {
