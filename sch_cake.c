@@ -2684,7 +2684,8 @@ static int cake_dump_class_stats(struct Qdisc *sch, unsigned long cl,
 	u32 idx = cl - 1;
 
 	if (idx < CAKE_QUEUES * q->tin_cnt) {
-		struct cake_tin_data *b = &q->tins[idx / CAKE_QUEUES];
+		struct cake_tin_data *b = \
+			&q->tins[q->tin_order[idx / CAKE_QUEUES]];
 		const struct cake_flow *flow = &b->flows[idx % CAKE_QUEUES];
 		const struct sk_buff *skb;
 
@@ -2714,7 +2715,7 @@ static void cake_walk(struct Qdisc *sch, struct qdisc_walker *arg)
 		return;
 
 	for (i = 0; i < q->tin_cnt; i++) {
-		struct cake_tin_data *b = &q->tins[i];
+		struct cake_tin_data *b = &q->tins[q->tin_order[i]];
 		for (j = 0; j < CAKE_QUEUES; j++) {
 			if (list_empty(&b->flows[j].flowchain) ||
 				arg->count < arg->skip) {
