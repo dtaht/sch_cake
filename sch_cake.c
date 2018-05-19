@@ -1816,8 +1816,7 @@ begin:
 				ktime_t time_to_pkt = \
 					ktime_sub(b->time_next_packet, now);
 
-				if (ktime_compare(time_to_pkt,
-						  ns_to_ktime(0)) <= 0 ||
+				if (ktime_to_ns(time_to_pkt) <= 0 ||
 				    ktime_compare(time_to_pkt,
 					          best_time) <= 0) {
 					best_time = time_to_pkt;
