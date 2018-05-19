@@ -990,7 +990,8 @@ static struct tcphdr *cake_get_tcphdr(const struct sk_buff *skb,
 				  min(__tcp_hdrlen(tcph), bufsize), buf);
 }
 
-static bool cake_tcph_is_sack(const struct tcphdr *tcph)
+static const u8 *cake_get_tcpopt(const struct tcphdr *tcph,
+				int code, int *oplen)
 {
 	/* inspired by tcp_parse_options in tcp_input.c */
 	int length = __tcp_hdrlen(tcph) - sizeof(struct tcphdr);
@@ -1009,13 +1010,91 @@ static bool cake_tcph_is_sack(const struct tcphdr *tcph)
 		opsize = *ptr++;
 		if (opsize < 2 || opsize > length)
 			break;
-		if (opcode == TCPOPT_SACK)
-			return true;
+
+		if (opcode == code) {
+			*oplen = opsize;
+			return ptr;
+		}
+
 		ptr += opsize - 2;
 		length -= opsize;
 	}
 
-	return false;
+	return NULL;
+}
+
+static bool cake_tcph_is_sack(const struct tcphdr *tcph)
+{
+	int opsize;
+
+	return cake_get_tcpopt(tcph, TCPOPT_SACK, &opsize) != NULL;
+}
+
+static void cake_tcph_get_tstamp(const struct tcphdr *tcph,
+				 u32 *tsval, u32 *tsecr)
+{
+	const u8 *ptr;
+	int opsize;
+
+	ptr = cake_get_tcpopt(tcph, TCPOPT_TIMESTAMP, &opsize);
+
+	if (ptr && opsize == TCPOLEN_TIMESTAMP) {
+		*tsval = get_unaligned_be32(ptr);
+		*tsecr = get_unaligned_be32(ptr + 4);
+	}
+}
+
+static bool cake_tcph_may_drop(const struct tcphdr *tcph,
+			       u32 tstamp_new, u32 tsecr_new)
+{
+	/* inspired by tcp_parse_options in tcp_input.c */
+	int length = __tcp_hdrlen(tcph) - sizeof(struct tcphdr);
+	const u8 *ptr = (const u8 *)(tcph + 1);
+	u32 tstamp, tsecr;
+
+	while (length > 0) {
+		int opcode = *ptr++;
+		int opsize;
+
+		if (opcode == TCPOPT_EOL)
+			break;
+		if (opcode == TCPOPT_NOP) {
+			length--;
+			continue;
+		}
+		opsize = *ptr++;
+		if (opsize < 2 || opsize > length)
+			break;
+
+		switch (opcode) {
+		case TCPOPT_MD5SIG: /* doesn't influence state */
+			break;
+
+		case TCPOPT_TIMESTAMP:
+			/* only drop timestamps lower than new */
+			if (opsize != TCPOLEN_TIMESTAMP)
+				return false;
+			tstamp = get_unaligned_be32(ptr);
+			tsecr = get_unaligned_be32(ptr + 4);
+			if (tstamp > tstamp_new || tsecr > tsecr_new)
+				return false;
+			break;
+
+		case TCPOPT_MSS:  /* these should only be set on SYN */
+		case TCPOPT_WINDOW:
+		case TCPOPT_SACK_PERM:
+		case TCPOPT_FASTOPEN:
+		case TCPOPT_EXP:
+		case TCPOPT_SACK: /* be conservative and never drop SACKs */
+		default:
+			return false;
+		}
+
+		ptr += opsize - 2;
+		length -= opsize;
+	}
+
+	return true;
 }
 
 static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
@@ -1031,6 +1110,7 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 	struct ipv6hdr _iph, _iph_check;
 	const struct sk_buff *skb;
 	int seglen, num_found = 0;
+	u32 tstamp = 0, tsecr = 0;
 
 	/* no other possible ACKs to filter */
 	if (flow->head == flow->tail)
@@ -1041,6 +1121,8 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 	iph = cake_get_iphdr(skb, &_iph);
 	if (!tcph)
 		return NULL;
+
+	cake_tcph_get_tstamp(tcph, &tstamp, &tsecr);
 
 	/* the 'triggering' packet need only have the ACK flag set.
 	 * also check that SYN is not set, as there won't be any previous ACKs.
@@ -1066,7 +1148,7 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 		if (!tcph_check || iph->version != iph_check->version ||
 		    tcph_check->source != tcph->source ||
 		    tcph_check->dest != tcph->dest ||
-		    cake_tcph_is_sack(tcph_check))
+		    !cake_tcph_may_drop(tcph_check, tstamp, tsecr))
 			continue;
 
 		if (iph_check->version == 4) {
@@ -1102,8 +1184,8 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 		 * options are ignored
 		 */
 		if (((tcp_flag_word(tcph_check) &
-			   cpu_to_be32(0x0E3F0000)) != TCP_FLAG_ACK) ||
-			 ((seglen - __tcp_hdrlen(tcph_check)) != 0))
+		      cpu_to_be32(0x0E3F0000)) != TCP_FLAG_ACK) ||
+		    ((seglen - __tcp_hdrlen(tcph_check)) != 0))
 			continue;
 
 		/* The triggering packet must ACK more data than the ACK under
