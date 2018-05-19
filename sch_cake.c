@@ -2289,6 +2289,18 @@ static int cake_change(struct Qdisc *sch, struct nlattr *opt,
 	if (err < 0)
 		return err;
 
+	if (tb[TCA_CAKE_NAT]) {
+#if IS_REACHABLE(CONFIG_NF_CONNTRACK)
+		q->flow_mode &= ~CAKE_FLOW_NAT_FLAG;
+		q->flow_mode |= CAKE_FLOW_NAT_FLAG *
+			!!nla_get_u32(tb[TCA_CAKE_NAT]);
+#else
+		NL_SET_ERR_MSG_ATTR(extack, "No conntrack support in kernel",
+				    tb[TCA_CAKE_NAT]);
+		return -EOPNOTSUPP;
+#endif
+	}
+
 	if (tb[TCA_CAKE_BASE_RATE64])
 		q->rate_bps = nla_get_u64(tb[TCA_CAKE_BASE_RATE64]);
 
@@ -2305,12 +2317,6 @@ static int cake_change(struct Qdisc *sch, struct nlattr *opt,
 	if (tb[TCA_CAKE_FLOW_MODE])
 		q->flow_mode = (nla_get_u32(tb[TCA_CAKE_FLOW_MODE]) &
 				CAKE_FLOW_MASK);
-
-	if (tb[TCA_CAKE_NAT]) {
-		q->flow_mode &= ~CAKE_FLOW_NAT_FLAG;
-		q->flow_mode |= CAKE_FLOW_NAT_FLAG *
-			!!nla_get_u32(tb[TCA_CAKE_NAT]);
-	}
 
 	if (tb[TCA_CAKE_ATM])
 		q->atm_mode = nla_get_u32(tb[TCA_CAKE_ATM]);
