@@ -2,6 +2,10 @@
 #define __NET_SCHED_COBALT_COMPAT_H
 /* Backport some stuff if needed.
  */
+#if KERNEL_VERSION(3, 11, 0) > LINUX_VERSION_CODE
+#define ktime_add_ms(kt, msec) ktime_add_ns(kt, msec * NSEC_PER_MSEC)
+#endif
+
 #if KERNEL_VERSION(3, 14, 0) > LINUX_VERSION_CODE
 
 static inline u32 reciprocal_scale(u32 val, u32 ep_ro)
@@ -21,6 +25,11 @@ static inline void kvfree(const void *addr)
 		kfree(addr);
 }
 
+#endif
+
+#if KERNEL_VERSION(3, 16, 0) > LINUX_VERSION_CODE
+#define ktime_after(cmp1, cmp2) ktime_compare(cmp1, cmp2) > 0
+#define ktime_before(cmp1, cmp2) ktime_compare(cmp1, cmp2) < 0
 #endif
 
 #if KERNEL_VERSION(3, 17, 0) > LINUX_VERSION_CODE
