@@ -1023,61 +1023,79 @@ static const u8 *cake_get_tcpopt(const struct tcphdr *tcph,
 	return NULL;
 }
 
-static bool cake_tcph_is_redundant_sack(const struct tcphdr *tcph_old,
-					const struct tcphdr *tcph_new)
+/* Compare two SACK sequences. A sequence is considered greater if it SACKs more
+ * bytes than the other. In the case where both sequences ACKs bytes that the
+ * other doesn't, A is considered greater.
+ *
+ * @return -1, 0 or 1 as normal compare functions
+ */
+static int cake_tcph_sack_compare(const struct tcphdr *tcph_a,
+				  const struct tcphdr *tcph_b)
 {
-	int oplen_old, oplen_new;
-	const u8 *sack_old, *sack_new;
-	bool strict_subset = false;
+	u64 bytes_a = 0, bytes_b = 0;
+	const u8 *sack_a, *sack_b;
+	int oplen_a, oplen_b;
+	bool first = true;
 
-	sack_new = cake_get_tcpopt(tcph_new, TCPOPT_SACK, &oplen_new);
-	if (sack_new == NULL || oplen_new % 8 != 2)
-		return false;
+	sack_a = cake_get_tcpopt(tcph_a, TCPOPT_SACK, &oplen_a);
+	sack_b = cake_get_tcpopt(tcph_b, TCPOPT_SACK, &oplen_b);
 
-	sack_old = cake_get_tcpopt(tcph_old, TCPOPT_SACK, &oplen_old);
-	if (sack_old == NULL)
-		return true;
+	if (sack_a && !sack_b)
+		return -1;
+	else if (sack_b && !sack_a)
+		return 1;
+	else if (!sack_a && !sack_b)
+		return 0;
 
 	/* pointer has already advanced past opcode and length bytes */
-	oplen_old -= 2;
+	oplen_a -= 2;
 
-	while (oplen_old >= 8) {
-		int oplen_tmp = oplen_new - 2;
-		const u8 *sack_tmp = sack_new;
-		bool subset = false;
-		u32 left_old, right_old;
+	while (oplen_a >= 8) {
+		u32 right_a = get_unaligned_be32(sack_a + 4);
+		u32 left_a = get_unaligned_be32(sack_a);
+		const u8 *sack_tmp = sack_b;
+		int oplen_tmp = oplen_b - 2;
+		bool found = false;
 
-		left_old = get_unaligned_be32(sack_old);
-		right_old = get_unaligned_be32(sack_old + 4);
 
-		if (left_old >= right_old)
-			return false;
+		/* invalid or empty SACK range; ignore */
+		if (left_a >= right_a)
+			continue;
+
+		bytes_a += right_a - left_a;
 
 		while (oplen_tmp >= 8) {
-			u32 left_new, right_new;
-			left_new = get_unaligned_be32(sack_tmp);
-			right_new = get_unaligned_be32(sack_tmp + 4);
+			u32 right_b = get_unaligned_be32(sack_tmp + 4);
+			u32 left_b = get_unaligned_be32(sack_tmp);
 
-			if (left_new <= left_old && right_new >= right_old) {
-				subset = true;
-				if (left_new < left_old || right_new > right_old)
-					strict_subset = true;
-				break;
+			if (left_b >= right_b)
+				continue;
+
+			if (first)
+				bytes_b += right_b - left_b;
+
+			if (left_b <= left_a && right_a <= right_b) {
+				found = true;
+				if (!first)
+					break;
 			}
 			oplen_tmp -= 8;
 			sack_tmp += 8;
 		}
 
-		if (subset) {
-			oplen_old -= 8;
-			sack_old += 8;
-			continue;
-		} else {
-			return false;
-		}
+		first = false;
+
+		if (!found)
+			return -1;
+
+		oplen_a -= 8;
+		sack_a += 8;
 	}
 
-	return strict_subset;
+	/* If we made it this far, all ranges SACKed by A are covered by B, so
+	 * either the SACKs are equal, or B SACKs more bytes.
+	 */
+	return bytes_b > bytes_a ? 1 : 0;
 }
 
 static void cake_tcph_get_tstamp(const struct tcphdr *tcph,
@@ -1177,6 +1195,7 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 	const struct sk_buff *skb;
 	int seglen, num_found = 0;
 	u32 tstamp = 0, tsecr = 0;
+	int sack_comp;
 
 	/* no other possible ACKs to filter */
 	if (flow->head == flow->tail)
@@ -1242,12 +1261,15 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 		if ((seglen - __tcp_hdrlen(tcph_check)) != 0)
 			continue;
 
+		sack_comp = cake_tcph_sack_compare(tcph_check, tcph);
+
 		/* The triggering packet must ACK more data than the ACK under
 		 * consideration, either because is has a strictly higher ACK
 		 * sequence number or because it is a strict superset SACK
 		 */
-		if ((ntohl(tcph_check->ack_seq) == ntohl(tcph->ack_seq) &&
-		     !cake_tcph_is_redundant_sack(tcph_check, tcph)) ||
+		if (sack_comp < 0 ||
+		    (ntohl(tcph_check->ack_seq) == ntohl(tcph->ack_seq) &&
+		     sack_comp == 0) ||
 		    (int32_t)(ntohl(tcph_check->ack_seq) -
 			      ntohl(tcph->ack_seq)) > 0)
 			continue;
