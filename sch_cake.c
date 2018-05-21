@@ -2811,7 +2811,7 @@ static int cake_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 
 		PUT_TSTAT_U64(THRESHOLD_RATE64, b->tin_rate_bps);
 		PUT_TSTAT_U64(SENT_BYTES64, b->bytes);
-		PUT_TSTAT_U64(BACKLOG_BYTES64, b->tin_backlog);
+		PUT_TSTAT_U32(BACKLOG_BYTES, b->tin_backlog);
 
 		PUT_TSTAT_U32(TARGET_US,
 			      ktime_to_us(ns_to_ktime(b->cparams.target)));
