@@ -7,7 +7,7 @@
  * Copyright (C) 2014-2018 Dave Täht <dave.taht@gmail.com>
  * Copyright (C) 2015-2018 Sebastian Moeller <moeller0@gmx.de>
  * (C) 2015-2018 Kevin Darbyshire-Bryant <kevin@darbyshire-bryant.me.uk>
- * Copyright (C) 2017 Ryan Mounce <ryan@mounce.com.au>
+ * Copyright (C) 2017-2018 Ryan Mounce <ryan@mounce.com.au>
  *
  * The CAKE Principles:
  *		   (or, how to have your cake and eat it too)
@@ -1023,11 +1023,61 @@ static const u8 *cake_get_tcpopt(const struct tcphdr *tcph,
 	return NULL;
 }
 
-static bool cake_tcph_is_sack(const struct tcphdr *tcph)
+static bool cake_tcph_is_redundant_sack(const struct tcphdr *tcph_old,
+					const struct tcphdr *tcph_new)
 {
-	int opsize;
+	int oplen_old, oplen_new;
+	const u8 *sack_old, *sack_new;
+	bool strict_subset = false;
 
-	return cake_get_tcpopt(tcph, TCPOPT_SACK, &opsize) != NULL;
+	sack_new = cake_get_tcpopt(tcph_new, TCPOPT_SACK, &oplen_new);
+	if (sack_new == NULL || oplen_new % 8 != 2)
+		return false;
+
+	sack_old = cake_get_tcpopt(tcph_old, TCPOPT_SACK, &oplen_old);
+	if (sack_old == NULL)
+		return true;
+
+	/* pointer has already advanced past opcode and length bytes */
+	oplen_old -= 2;
+
+	while (oplen_old >= 8) {
+		int oplen_tmp = oplen_new - 2;
+		const u8 *sack_tmp = sack_new;
+		bool subset = false;
+		u32 left_old, right_old;
+
+		left_old = get_unaligned_be32(sack_old);
+		right_old = get_unaligned_be32(sack_old + 4);
+
+		if (left_old >= right_old)
+			return false;
+
+		while (oplen_tmp >= 8) {
+			u32 left_new, right_new;
+			left_new = get_unaligned_be32(sack_tmp);
+			right_new = get_unaligned_be32(sack_tmp + 4);
+
+			if (left_new <= left_old && right_new >= right_old) {
+				subset = true;
+				if (left_new < left_old || right_new > right_old)
+					strict_subset = true;
+				break;
+			}
+			oplen_tmp -= 8;
+			sack_tmp += 8;
+		}
+
+		if (subset) {
+			oplen_old -= 8;
+			sack_old += 8;
+			continue;
+		} else {
+			return false;
+		}
+	}
+
+	return strict_subset;
 }
 
 static void cake_tcph_get_tstamp(const struct tcphdr *tcph,
@@ -1082,6 +1132,11 @@ static bool cake_tcph_may_drop(const struct tcphdr *tcph,
 		case TCPOPT_MD5SIG: /* doesn't influence state */
 			break;
 
+		case TCPOPT_SACK: /* stricter checking performed later */
+			if (opsize % 8 != 2)
+				return false;
+			break;
+
 		case TCPOPT_TIMESTAMP:
 			/* only drop timestamps lower than new */
 			if (opsize != TCPOLEN_TIMESTAMP)
@@ -1097,8 +1152,7 @@ static bool cake_tcph_may_drop(const struct tcphdr *tcph,
 		case TCPOPT_SACK_PERM:
 		case TCPOPT_FASTOPEN:
 		case TCPOPT_EXP:
-		case TCPOPT_SACK: /* be conservative and never drop SACKs */
-		default:
+		default: /* don't drop if any unknown options are present */
 			return false;
 		}
 
@@ -1190,10 +1244,10 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 
 		/* The triggering packet must ACK more data than the ACK under
 		 * consideration, either because is has a strictly higher ACK
-		 * sequence number or because it is a SACK
+		 * sequence number or because it is a strict superset SACK
 		 */
 		if ((ntohl(tcph_check->ack_seq) == ntohl(tcph->ack_seq) &&
-		     !cake_tcph_is_sack(tcph)) ||
+		     !cake_tcph_is_redundant_sack(tcph_check, tcph)) ||
 		    (int32_t)(ntohl(tcph_check->ack_seq) -
 			      ntohl(tcph->ack_seq)) > 0)
 			continue;
