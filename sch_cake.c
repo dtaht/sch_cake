@@ -2651,7 +2651,7 @@ static int cake_dump(struct Qdisc *sch, struct sk_buff *skb)
 		goto nla_put_failure;
 
 	if (nla_put_u64_64bit(skb, TCA_CAKE_BASE_RATE64, q->rate_bps,
-			      TCA_CAKE_TIN_STATS_PAD))
+			      TCA_CAKE_PAD))
 		goto nla_put_failure;
 
 	if (nla_put_u32(skb, TCA_CAKE_FLOW_MODE,
@@ -2852,16 +2852,17 @@ static int cake_dump_class_stats(struct Qdisc *sch, unsigned long cl,
 				 struct gnet_dump *d)
 {
 	struct cake_sched_data *q = qdisc_priv(sch);
-	const struct cake_tin_data *b = NULL;
 	const struct cake_flow *flow = NULL;
 	struct gnet_stats_queue qs = { 0 };
 	struct nlattr *stats;
 	u32 idx = cl - 1;
 
 	if (idx < CAKE_QUEUES * q->tin_cnt) {
-		b = &q->tins[q->tin_order[idx / CAKE_QUEUES]];
-		flow = &b->flows[idx % CAKE_QUEUES];
+		const struct cake_tin_data *b = \
+			&q->tins[q->tin_order[idx / CAKE_QUEUES]];
 		const struct sk_buff *skb;
+
+		flow = &b->flows[idx % CAKE_QUEUES];
 
 		if (flow->head) {
 			sch_tree_lock(sch);
@@ -2877,7 +2878,6 @@ static int cake_dump_class_stats(struct Qdisc *sch, unsigned long cl,
 	}
 	if (gnet_stats_copy_queue(d, NULL, &qs, qs.qlen) < 0)
 		return -1;
-
 	if (flow) {
 		ktime_t now = ktime_get();
 
@@ -2899,17 +2899,18 @@ static int cake_dump_class_stats(struct Qdisc *sch, unsigned long cl,
 		PUT_STAT_U32(COBALT_COUNT, flow->cvars.count);
 		PUT_STAT_U32(P_DROP, flow->cvars.p_drop);
 		if (flow->cvars.p_drop) {
-			PUT_STATS_S32(BLUE_TIMER_US,
-				      ktime_to_us(
-					      ktime_sub(now,
-						      flow->cvars.blue_timer)));
+			PUT_STAT_S32(BLUE_TIMER_US,
+				     ktime_to_us(
+					     ktime_sub(now,
+						       flow->cvars.blue_timer)));
 		}
 		if (flow->cvars.dropping) {
-			PUT_STATS_S32(DROP_NEXT_US,
-				      ktime_to_us(
-					      ktime_sub(now,
-						      flow->cvars.drop_next)));
+			PUT_STAT_S32(DROP_NEXT_US,
+				     ktime_to_us(
+					     ktime_sub(now,
+						       flow->cvars.drop_next)));
 		}
+
 		if (nla_nest_end(d->skb, stats) < 0)
 			return -1;
 	}
