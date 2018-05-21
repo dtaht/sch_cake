@@ -1257,21 +1257,27 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 			continue;
 		}
 
-		/* must be 'pure' ACK, contain zero bytes of segment data */
-		if ((seglen - __tcp_hdrlen(tcph_check)) != 0)
+		/* Don't drop ACKs with segment data, and don't drop ACKs higher
+		 * cumulative ACK counter than triggering packet. Check ACK
+		 * seqno here to avoid parsing SACK options of packets we are
+		 * going to exclude anyway.
+		 */
+		if ((seglen - __tcp_hdrlen(tcph_check)) != 0 ||
+		    (int32_t)(ntohl(tcph_check->ack_seq) -
+  			      ntohl(tcph->ack_seq)) > 0)
 			continue;
 
+		/* Check SACK options. The triggering packet must SACK more data
+		 * than the ACK under consideration, or SACK the same range but
+		 * have a larger cumulative ACK counter. The latter is a
+		 * pathological case, but is contained in the following check
+		 * anyway, just to be safe.
+		 */
 		sack_comp = cake_tcph_sack_compare(tcph_check, tcph);
 
-		/* The triggering packet must ACK more data than the ACK under
-		 * consideration, either because is has a strictly higher ACK
-		 * sequence number or because it is a strict superset SACK
-		 */
 		if (sack_comp < 0 ||
 		    (ntohl(tcph_check->ack_seq) == ntohl(tcph->ack_seq) &&
-		     sack_comp == 0) ||
-		    (int32_t)(ntohl(tcph_check->ack_seq) -
-			      ntohl(tcph->ack_seq)) > 0)
+		     sack_comp == 0))
 			continue;
 
 		/* At this point we have found an eligible pure ACK to drop; if
