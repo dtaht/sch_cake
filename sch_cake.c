@@ -1052,6 +1052,18 @@ static bool cake_tcph_may_drop(const struct tcphdr *tcph,
 	const u8 *ptr = (const u8 *)(tcph + 1);
 	u32 tstamp, tsecr;
 
+	/* 3 reserved flags must be unset to avoid future breakage
+	 * ECE/CWR/NS can be safely ignored
+	 * ACK must be set
+	 * All other flags URG/PSH/RST/SYN/FIN must be unset
+	 * 0x0FFF0000 = all TCP flags (confirm ACK=1, others zero)
+	 * 0x01C00000 = NS/CWR/ECE (safe to ignore)
+	 * 0x0E3F0000 = 0x0FFF0000 & ~0x01C00000
+	 */
+	if (((tcp_flag_word(tcph) &
+	      cpu_to_be32(0x0E3F0000)) != TCP_FLAG_ACK))
+		return false;
+
 	while (length > 0) {
 		int opcode = *ptr++;
 		int opsize;
@@ -1172,20 +1184,8 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 			continue;
 		}
 
-		/* stricter criteria apply to ACKs that we may filter
-		 * 3 reserved flags must be unset to avoid future breakage
-		 * ECE/CWR/NS can be safely ignored
-		 * ACK must be set
-		 * All other flags URG/PSH/RST/SYN/FIN must be unset
-		 * 0x0FFF0000 = all TCP flags (confirm ACK=1, others zero)
-		 * 0x01C00000 = NS/CWR/ECE (safe to ignore)
-		 * 0x0E3F0000 = 0x0FFF0000 & ~0x01C00000
-		 * must be 'pure' ACK, contain zero bytes of segment data
-		 * options are ignored
-		 */
-		if (((tcp_flag_word(tcph_check) &
-		      cpu_to_be32(0x0E3F0000)) != TCP_FLAG_ACK) ||
-		    ((seglen - __tcp_hdrlen(tcph_check)) != 0))
+		/* must be 'pure' ACK, contain zero bytes of segment data */
+		if ((seglen - __tcp_hdrlen(tcph_check)) != 0)
 			continue;
 
 		/* The triggering packet must ACK more data than the ACK under
