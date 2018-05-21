@@ -7,7 +7,7 @@
  * Copyright (C) 2014-2018 Dave Täht <dave.taht@gmail.com>
  * Copyright (C) 2015-2018 Sebastian Moeller <moeller0@gmx.de>
  * (C) 2015-2018 Kevin Darbyshire-Bryant <kevin@darbyshire-bryant.me.uk>
- * Copyright (C) 2017 Ryan Mounce <ryan@mounce.com.au>
+ * Copyright (C) 2017-2018 Ryan Mounce <ryan@mounce.com.au>
  *
  * The CAKE Principles:
  *		   (or, how to have your cake and eat it too)
@@ -1023,11 +1023,79 @@ static const u8 *cake_get_tcpopt(const struct tcphdr *tcph,
 	return NULL;
 }
 
-static bool cake_tcph_is_sack(const struct tcphdr *tcph)
+/* Compare two SACK sequences. A sequence is considered greater if it SACKs more
+ * bytes than the other. In the case where both sequences ACKs bytes that the
+ * other doesn't, A is considered greater.
+ *
+ * @return -1, 0 or 1 as normal compare functions
+ */
+static int cake_tcph_sack_compare(const struct tcphdr *tcph_a,
+				  const struct tcphdr *tcph_b)
 {
-	int opsize;
+	u64 bytes_a = 0, bytes_b = 0;
+	const u8 *sack_a, *sack_b;
+	int oplen_a, oplen_b;
+	bool first = true;
 
-	return cake_get_tcpopt(tcph, TCPOPT_SACK, &opsize) != NULL;
+	sack_a = cake_get_tcpopt(tcph_a, TCPOPT_SACK, &oplen_a);
+	sack_b = cake_get_tcpopt(tcph_b, TCPOPT_SACK, &oplen_b);
+
+	if (sack_a && !sack_b)
+		return -1;
+	else if (sack_b && !sack_a)
+		return 1;
+	else if (!sack_a && !sack_b)
+		return 0;
+
+	/* pointer has already advanced past opcode and length bytes */
+	oplen_a -= 2;
+
+	while (oplen_a >= 8) {
+		u32 right_a = get_unaligned_be32(sack_a + 4);
+		u32 left_a = get_unaligned_be32(sack_a);
+		const u8 *sack_tmp = sack_b;
+		int oplen_tmp = oplen_b - 2;
+		bool found = false;
+
+
+		/* invalid or empty SACK range; ignore */
+		if (left_a >= right_a)
+			continue;
+
+		bytes_a += right_a - left_a;
+
+		while (oplen_tmp >= 8) {
+			u32 right_b = get_unaligned_be32(sack_tmp + 4);
+			u32 left_b = get_unaligned_be32(sack_tmp);
+
+			if (left_b >= right_b)
+				continue;
+
+			if (first)
+				bytes_b += right_b - left_b;
+
+			if (left_b <= left_a && right_a <= right_b) {
+				found = true;
+				if (!first)
+					break;
+			}
+			oplen_tmp -= 8;
+			sack_tmp += 8;
+		}
+
+		first = false;
+
+		if (!found)
+			return -1;
+
+		oplen_a -= 8;
+		sack_a += 8;
+	}
+
+	/* If we made it this far, all ranges SACKed by A are covered by B, so
+	 * either the SACKs are equal, or B SACKs more bytes.
+	 */
+	return bytes_b > bytes_a ? 1 : 0;
 }
 
 static void cake_tcph_get_tstamp(const struct tcphdr *tcph,
@@ -1052,6 +1120,18 @@ static bool cake_tcph_may_drop(const struct tcphdr *tcph,
 	const u8 *ptr = (const u8 *)(tcph + 1);
 	u32 tstamp, tsecr;
 
+	/* 3 reserved flags must be unset to avoid future breakage
+	 * ECE/CWR/NS can be safely ignored
+	 * ACK must be set
+	 * All other flags URG/PSH/RST/SYN/FIN must be unset
+	 * 0x0FFF0000 = all TCP flags (confirm ACK=1, others zero)
+	 * 0x01C00000 = NS/CWR/ECE (safe to ignore)
+	 * 0x0E3F0000 = 0x0FFF0000 & ~0x01C00000
+	 */
+	if (((tcp_flag_word(tcph) &
+	      cpu_to_be32(0x0E3F0000)) != TCP_FLAG_ACK))
+		return false;
+
 	while (length > 0) {
 		int opcode = *ptr++;
 		int opsize;
@@ -1070,6 +1150,11 @@ static bool cake_tcph_may_drop(const struct tcphdr *tcph,
 		case TCPOPT_MD5SIG: /* doesn't influence state */
 			break;
 
+		case TCPOPT_SACK: /* stricter checking performed later */
+			if (opsize % 8 != 2)
+				return false;
+			break;
+
 		case TCPOPT_TIMESTAMP:
 			/* only drop timestamps lower than new */
 			if (opsize != TCPOLEN_TIMESTAMP)
@@ -1085,8 +1170,7 @@ static bool cake_tcph_may_drop(const struct tcphdr *tcph,
 		case TCPOPT_SACK_PERM:
 		case TCPOPT_FASTOPEN:
 		case TCPOPT_EXP:
-		case TCPOPT_SACK: /* be conservative and never drop SACKs */
-		default:
+		default: /* don't drop if any unknown options are present */
 			return false;
 		}
 
@@ -1111,6 +1195,7 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 	const struct sk_buff *skb;
 	int seglen, num_found = 0;
 	u32 tstamp = 0, tsecr = 0;
+	int sack_comp;
 
 	/* no other possible ACKs to filter */
 	if (flow->head == flow->tail)
@@ -1172,28 +1257,19 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 			continue;
 		}
 
-		/* stricter criteria apply to ACKs that we may filter
-		 * 3 reserved flags must be unset to avoid future breakage
-		 * ECE/CWR/NS can be safely ignored
-		 * ACK must be set
-		 * All other flags URG/PSH/RST/SYN/FIN must be unset
-		 * 0x0FFF0000 = all TCP flags (confirm ACK=1, others zero)
-		 * 0x01C00000 = NS/CWR/ECE (safe to ignore)
-		 * 0x0E3F0000 = 0x0FFF0000 & ~0x01C00000
-		 * must be 'pure' ACK, contain zero bytes of segment data
-		 * options are ignored
-		 */
-		if (((tcp_flag_word(tcph_check) &
-		      cpu_to_be32(0x0E3F0000)) != TCP_FLAG_ACK) ||
-		    ((seglen - __tcp_hdrlen(tcph_check)) != 0))
+		/* must be 'pure' ACK, contain zero bytes of segment data */
+		if ((seglen - __tcp_hdrlen(tcph_check)) != 0)
 			continue;
+
+		sack_comp = cake_tcph_sack_compare(tcph_check, tcph);
 
 		/* The triggering packet must ACK more data than the ACK under
 		 * consideration, either because is has a strictly higher ACK
-		 * sequence number or because it is a SACK
+		 * sequence number or because it is a strict superset SACK
 		 */
-		if ((ntohl(tcph_check->ack_seq) == ntohl(tcph->ack_seq) &&
-		     !cake_tcph_is_sack(tcph)) ||
+		if (sack_comp < 0 ||
+		    (ntohl(tcph_check->ack_seq) == ntohl(tcph->ack_seq) &&
+		     sack_comp == 0) ||
 		    (int32_t)(ntohl(tcph_check->ack_seq) -
 			      ntohl(tcph->ack_seq)) > 0)
 			continue;
