@@ -1862,6 +1862,7 @@ begin:
 	    ktime_after(q->failsafe_next_packet, now)) {
 		u64 next = min(ktime_to_ns(q->time_next_packet),
 			       ktime_to_ns(q->failsafe_next_packet));
+
 		sch->qstats.overlimits++;
 		qdisc_watchdog_schedule_ns(&q->watchdog, next);
 		return NULL;
@@ -1889,7 +1890,7 @@ begin:
 		 * - Highest-priority tin with queue and meeting schedule, or
 		 * - The earliest-scheduled tin with queue.
 		 */
-		ktime_t best_time = ns_to_ktime(KTIME_MAX);
+		ktime_t best_time = KTIME_MAX;
 		int tin, best_tin = 0;
 
 		for (tin = 0; tin < q->tin_cnt; tin++) {
@@ -2055,6 +2056,7 @@ retry:
 	if (ktime_after(q->time_next_packet, now) && sch->q.qlen) {
 		u64 next = min(ktime_to_ns(q->time_next_packet),
 			       ktime_to_ns(q->failsafe_next_packet));
+
 		qdisc_watchdog_schedule_ns(&q->watchdog, next);
 	} else if (!sch->q.qlen) {
 		int i;
@@ -2900,7 +2902,6 @@ static void cake_walk(struct Qdisc *sch, struct qdisc_walker *arg)
 		}
 	}
 }
-
 
 static const struct Qdisc_class_ops cake_class_ops = {
 	.leaf		=	cake_leaf,
