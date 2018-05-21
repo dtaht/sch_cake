@@ -2810,16 +2810,17 @@ static int cake_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 			goto nla_put_failure;
 
 		PUT_TSTAT_U64(THRESHOLD_RATE64, b->tin_rate_bps);
+		PUT_TSTAT_U64(SENT_BYTES64, b->bytes);
+		PUT_TSTAT_U64(BACKLOG_BYTES64, b->tin_backlog);
+
 		PUT_TSTAT_U32(TARGET_US,
 			      ktime_to_us(ns_to_ktime(b->cparams.target)));
 		PUT_TSTAT_U32(INTERVAL_US,
 			      ktime_to_us(ns_to_ktime(b->cparams.interval)));
 
 		PUT_TSTAT_U32(SENT_PACKETS, b->packets);
-		PUT_TSTAT_U64(SENT_BYTES64, b->bytes);
 		PUT_TSTAT_U32(DROPPED_PACKETS, b->tin_dropped);
 		PUT_TSTAT_U32(ECN_MARKED_PACKETS, b->tin_ecn_mark);
-		PUT_TSTAT_U64(BACKLOG_BYTES64, b->tin_backlog);
 		PUT_TSTAT_U32(ACKS_DROPPED_PACKETS, b->ack_drops);
 
 		PUT_TSTAT_U32(PEAK_DELAY_US,
