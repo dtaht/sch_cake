@@ -1321,7 +1321,7 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 	 * packet is consecutive with the eligible ACK, and their flags match.
 	 */
 	if (elig_ack && aggressive && elig_ack->next == skb &&
-	    (elig_flags == (tcp_flag_word(tcph) & (TCP_FLAG_ECE | TCP_FLAG_CWR)))
+	    (elig_flags == (tcp_flag_word(tcph) & (TCP_FLAG_ECE | TCP_FLAG_CWR))))
 		goto found;
 
 	return NULL;
