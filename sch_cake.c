@@ -1122,15 +1122,16 @@ static bool cake_tcph_may_drop(const struct tcphdr *tcph,
 	u32 tstamp, tsecr;
 
 	/* 3 reserved flags must be unset to avoid future breakage
-	 * ECE/CWR/NS can be safely ignored
 	 * ACK must be set
+	 * ECE/CWR can be safely ignored
+	 * Both checked later, only filter if equal between successive ACKs
 	 * All other flags URG/PSH/RST/SYN/FIN must be unset
 	 * 0x0FFF0000 = all TCP flags (confirm ACK=1, others zero)
-	 * 0x01C00000 = NS/CWR/ECE (safe to ignore)
-	 * 0x0E3F0000 = 0x0FFF0000 & ~0x01C00000
+	 * 0x00C00000 = CWR/ECE (safe to ignore)
+	 * 0x0F3F0000 = 0x0FFF0000 & ~0x00C00000
 	 */
 	if (((tcp_flag_word(tcph) &
-	      cpu_to_be32(0x0E3F0000)) != TCP_FLAG_ACK))
+	      cpu_to_be32(0x0F3F0000)) != TCP_FLAG_ACK))
 		return false;
 
 	while (length > 0) {
@@ -1188,6 +1189,7 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 {
 	bool aggressive = q->ack_filter == CAKE_ACK_AGGRESSIVE;
 	struct sk_buff *elig_ack = NULL, *elig_ack_prev = NULL;
+	__be32 elig_flags = 0;
 	struct sk_buff *skb_check, *skb_prev = NULL;
 	const struct ipv6hdr *ipv6h, *ipv6h_check;
 	unsigned char _tcph[64], _tcph_check[64];
@@ -1231,7 +1233,7 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 					     sizeof(_tcph_check));
 
 		/* only TCP packets with matching 5-tuple are eligible, and
-		 * never drop a SACK */
+		 * check options */
 		if (!tcph_check || iph->version != iph_check->version ||
 		    tcph_check->source != tcph->source ||
 		    tcph_check->dest != tcph->dest ||
@@ -1293,6 +1295,22 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 		if (!elig_ack) {
 			elig_ack = skb_check;
 			elig_ack_prev = skb_prev;
+			elig_flags = (tcp_flag_word(tcph_check)
+					& (TCP_FLAG_ECE | TCP_FLAG_CWR));
+		}
+
+		/* Protect DCTCP. If the ECE flag has changed since the
+		 * previous eligible ACK, the previous ACK isn't eligible for
+		 * filtering however the current ACK remains eligible.
+		 * Also be conservative and give CWR the same protection.
+		 */
+		if ((tcp_flag_word(tcph_check)
+		     & (TCP_FLAG_ECE)) != elig_flags) {
+			elig_ack = skb_check;
+			elig_ack_prev = skb_prev;
+			elig_flags = (tcp_flag_word(tcph_check)
+					& (TCP_FLAG_ECE | TCP_FLAG_CWR));
+			continue;
 		}
 
 		if (num_found++ > 0 || aggressive)
