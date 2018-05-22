@@ -70,12 +70,9 @@
 #include <net/pkt_cls.h>
 #include <net/tcp.h>
 #include <net/flow_dissector.h>
-
-#if IS_REACHABLE(CONFIG_NF_CONNTRACK)
 #include <net/netfilter/nf_conntrack_core.h>
 #include <net/netfilter/nf_conntrack_zones.h>
 #include <net/netfilter/nf_conntrack.h>
-#endif
 
 #define CAKE_SET_WAYS (8)
 #define CAKE_MAX_TINS (8)
@@ -98,6 +95,30 @@ struct cobalt_params {
 	u32	p_inc;
 	u32	p_dec;
 };
+
+struct cake_conntrack_callbacks {
+	bool available;
+	bool (*nf_ct_get_tuplepr)(const struct sk_buff *skb,
+				  unsigned int nhoff,
+				  u_int16_t l3num,
+				  struct net *net,
+				  struct nf_conntrack_tuple *tuple);
+	struct nf_conntrack_tuple_hash * (*nf_conntrack_find_get) (
+		struct net *net,
+		const struct nf_conntrack_zone *zone,
+		const struct nf_conntrack_tuple *tuple);
+	void (*nf_conntrack_destroy)(struct nf_conntrack *nfct);
+	struct nf_conntrack_zone *nf_ct_zone_dflt;
+};
+
+static inline void cake_nf_ct_put(struct cake_conntrack_callbacks *cb,
+				  struct nf_conn *ct)
+{
+	struct nf_conntrack *nfct = &ct->ct_general;
+	if (nfct && atomic_dec_and_test(&nfct->use))
+		cb->nf_conntrack_destroy(nfct);
+}
+
 
 /* struct cobalt_vars - contains codel and blue variables
  * @count:		codel dropping frequency
@@ -205,6 +226,7 @@ struct cake_sched_data {
 	struct tcf_proto __rcu *filter_list; /* optional external classifier */
 	struct tcf_block *block;
 	struct cake_tin_data *tins;
+	struct cake_conntrack_callbacks conntrack;
 
 	struct cake_heap_entry overflow_heap[CAKE_QUEUES * CAKE_MAX_TINS];
 	u16		overflow_timeout;
@@ -586,15 +608,17 @@ static bool cobalt_should_drop(struct cobalt_vars *vars,
 	return drop;
 }
 
-#if IS_REACHABLE(CONFIG_NF_CONNTRACK)
-
-static void cake_update_flowkeys(struct flow_keys *keys,
+static void cake_update_flowkeys(struct cake_conntrack_callbacks *cb,
+				 struct flow_keys *keys,
 				 const struct sk_buff *skb)
 {
 	const struct nf_conntrack_tuple *tuple;
 	enum ip_conntrack_info ctinfo;
 	struct nf_conn *ct;
 	bool rev = false;
+
+	if (!cb->available)
+		return;
 
 	if (tc_skb_protocol(skb) != htons(ETH_P_IP))
 		return;
@@ -606,14 +630,14 @@ static void cake_update_flowkeys(struct flow_keys *keys,
 		const struct nf_conntrack_tuple_hash *hash;
 		struct nf_conntrack_tuple srctuple;
 
-		if (!nf_ct_get_tuplepr(skb, skb_network_offset(skb),
-				       NFPROTO_IPV4, dev_net(skb->dev),
-				       &srctuple))
+		if (!cb->nf_ct_get_tuplepr(skb, skb_network_offset(skb),
+					   NFPROTO_IPV4, dev_net(skb->dev),
+					   &srctuple))
 			return;
 
-		hash = nf_conntrack_find_get(dev_net(skb->dev),
-					     &nf_ct_zone_dflt,
-					     &srctuple);
+		hash = cb->nf_conntrack_find_get(dev_net(skb->dev),
+						cb->nf_ct_zone_dflt,
+						&srctuple);
 		if (!hash)
 			return;
 
@@ -630,15 +654,8 @@ static void cake_update_flowkeys(struct flow_keys *keys,
 		keys->ports.dst = rev ? tuple->src.u.all : tuple->dst.u.all;
 	}
 	if (rev)
-		nf_ct_put(ct);
+		cake_nf_ct_put(cb, ct);
 }
-#else
-static void cake_update_flowkeys(struct flow_keys *keys,
-				 const struct sk_buff *skb)
-{
-	/* There is nothing we can do here without CONNTRACK */
-}
-#endif
 
 /* Cake has several subtle multiple bit settings. In these cases you
  *  would be matching triple isolate mode as well.
@@ -654,8 +671,8 @@ static bool cake_ddst(int flow_mode)
 	return (flow_mode & CAKE_FLOW_DUAL_DST) == CAKE_FLOW_DUAL_DST;
 }
 
-static u32 cake_hash(struct cake_tin_data *q, const struct sk_buff *skb,
-		     int flow_mode)
+static u32 cake_hash(struct cake_sched_data *c, struct cake_tin_data *q,
+		     const struct sk_buff *skb, int flow_mode)
 {
 	u32 flow_hash = 0, srchost_hash, dsthost_hash;
 	u16 reduced_hash, srchost_idx, dsthost_idx;
@@ -668,7 +685,7 @@ static u32 cake_hash(struct cake_tin_data *q, const struct sk_buff *skb,
 				   FLOW_DISSECTOR_F_STOP_AT_FLOW_LABEL);
 
 	if (flow_mode & CAKE_FLOW_NAT_FLAG)
-		cake_update_flowkeys(&keys, skb);
+		cake_update_flowkeys(&c->conntrack, &keys, skb);
 
 	/* flow_hash_from_keys() sorts the addresses by value, so we have
 	 * to preserve their order in a separate data structure to treat
@@ -835,7 +852,7 @@ static u32 cake_classify(struct Qdisc *sch, struct cake_tin_data *t,
 
 	filter = rcu_dereference_bh(q->filter_list);
 	if (!filter)
-		return cake_hash(t, skb, flow_mode) + 1;
+		return cake_hash(q, t, skb, flow_mode) + 1;
 
 	*qerr = NET_XMIT_SUCCESS | __NET_XMIT_BYPASS;
 	result = tcf_classify(skb, filter, &res, false);
@@ -2440,6 +2457,29 @@ static void cake_reconfigure(struct Qdisc *sch)
 				  q->buffer_config_limit));
 }
 
+static bool cake_find_conntrack(struct cake_sched_data *q)
+{
+	if (q->conntrack.available)
+		return true;
+
+	q->conntrack.nf_ct_get_tuplepr = \
+		(void *)kallsyms_lookup_name("nf_ct_get_tuplepr");
+	q->conntrack.nf_conntrack_find_get = \
+		(void *)kallsyms_lookup_name("nf_conntrack_find_get");
+	q->conntrack.nf_conntrack_destroy = \
+		(void *)kallsyms_lookup_name("nf_conntrack_destroy");
+	q->conntrack.nf_ct_zone_dflt = \
+		(void *)kallsyms_lookup_name("nf_ct_zone_dflt");
+
+	if (q->conntrack.nf_ct_get_tuplepr &&
+	    q->conntrack.nf_conntrack_find_get &&
+	    q->conntrack.nf_conntrack_destroy &&
+	    q->conntrack.nf_ct_zone_dflt)
+		q->conntrack.available = true;
+
+	return q->conntrack.available;
+}
+
 static int cake_change(struct Qdisc *sch, struct nlattr *opt,
 		       struct netlink_ext_ack *extack)
 {
@@ -2455,15 +2495,14 @@ static int cake_change(struct Qdisc *sch, struct nlattr *opt,
 		return err;
 
 	if (tb[TCA_CAKE_NAT]) {
-#if IS_REACHABLE(CONFIG_NF_CONNTRACK)
+		if (!cake_find_conntrack(q)) {
+			NL_SET_ERR_MSG_ATTR(extack, "No conntrack support in kernel",
+ 					    tb[TCA_CAKE_NAT]);
+			return -EOPNOTSUPP;
+		}
 		q->flow_mode &= ~CAKE_FLOW_NAT_FLAG;
 		q->flow_mode |= CAKE_FLOW_NAT_FLAG *
 			!!nla_get_u32(tb[TCA_CAKE_NAT]);
-#else
-		NL_SET_ERR_MSG_ATTR(extack, "No conntrack support in kernel",
-				    tb[TCA_CAKE_NAT]);
-		return -EOPNOTSUPP;
-#endif
 	}
 
 	if (tb[TCA_CAKE_BASE_RATE64])
