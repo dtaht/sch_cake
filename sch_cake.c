@@ -1123,11 +1123,10 @@ static bool cake_tcph_may_drop(const struct tcphdr *tcph,
 
 	/* 3 reserved flags must be unset to avoid future breakage
 	 * ACK must be set
-	 * ECE/CWR can be safely ignored
-	 * Both checked later, only filter if equal between successive ACKs
+	 * ECE/CWR are handled separately
 	 * All other flags URG/PSH/RST/SYN/FIN must be unset
 	 * 0x0FFF0000 = all TCP flags (confirm ACK=1, others zero)
-	 * 0x00C00000 = CWR/ECE (safe to ignore)
+	 * 0x00C00000 = CWR/ECE (handled separately)
 	 * 0x0F3F0000 = 0x0FFF0000 & ~0x00C00000
 	 */
 	if (((tcp_flag_word(tcph) &
@@ -1189,7 +1188,6 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 {
 	bool aggressive = q->ack_filter == CAKE_ACK_AGGRESSIVE;
 	struct sk_buff *elig_ack = NULL, *elig_ack_prev = NULL;
-	__be32 elig_flags = 0;
 	struct sk_buff *skb_check, *skb_prev = NULL;
 	const struct ipv6hdr *ipv6h, *ipv6h_check;
 	unsigned char _tcph[64], _tcph_check[64];
@@ -1199,6 +1197,7 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 	const struct sk_buff *skb;
 	int seglen, num_found = 0;
 	u32 tstamp = 0, tsecr = 0;
+	__be32 elig_flags = 0;
 	int sack_comp;
 
 	/* no other possible ACKs to filter */
@@ -1236,8 +1235,7 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 		 * check options */
 		if (!tcph_check || iph->version != iph_check->version ||
 		    tcph_check->source != tcph->source ||
-		    tcph_check->dest != tcph->dest ||
-		    !cake_tcph_may_drop(tcph_check, tstamp, tsecr))
+		    tcph_check->dest != tcph->dest)
 			continue;
 
 		if (iph_check->version == 4) {
@@ -1261,12 +1259,25 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 			continue;
 		}
 
-		/* Don't drop ACKs with segment data, and don't drop ACKs higher
-		 * cumulative ACK counter than triggering packet. Check ACK
-		 * seqno here to avoid parsing SACK options of packets we are
-		 * going to exclude anyway.
+		/* If the ECE/CWR flags changed from the previous eligible
+		 * packet in the same flow, we should no longer be dropping that
+		 * previous packet as this would lose information.
 		 */
-		if ((seglen - __tcp_hdrlen(tcph_check)) != 0 ||
+		if (elig_ack && (tcp_flag_word(tcph_check) &
+				 (TCP_FLAG_ECE | TCP_FLAG_CWR)) != elig_flags) {
+			elig_ack = NULL;
+			elig_ack_prev = NULL;
+			num_found--;
+		}
+
+		/* Check TCP options and flags, don't drop ACKs with segment
+		 * data, and don't drop ACKs with a higher cumulative ACK
+		 * counter than the triggering packet. Check ACK seqno here to
+		 * avoid parsing SACK options of packets we are going to exclude
+		 * anyway.
+		 */
+		if (!cake_tcph_may_drop(tcph_check, tstamp, tsecr) ||
+		    (seglen - __tcp_hdrlen(tcph_check)) != 0 ||
 		    after(ntohl(tcph_check->ack_seq), ntohl(tcph->ack_seq)))
 			continue;
 
@@ -1296,26 +1307,22 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 			elig_ack = skb_check;
 			elig_ack_prev = skb_prev;
 			elig_flags = (tcp_flag_word(tcph_check)
-					& (TCP_FLAG_ECE | TCP_FLAG_CWR));
+				      & (TCP_FLAG_ECE | TCP_FLAG_CWR));
 		}
 
-		/* Protect DCTCP. If the ECE flag has changed since the
-		 * previous eligible ACK, the previous ACK isn't eligible for
-		 * filtering however the current ACK remains eligible.
-		 * Also be conservative and give CWR the same protection.
-		 */
-		if ((tcp_flag_word(tcph_check)
-		     & (TCP_FLAG_ECE)) != elig_flags) {
-			elig_ack = skb_check;
-			elig_ack_prev = skb_prev;
-			elig_flags = (tcp_flag_word(tcph_check)
-					& (TCP_FLAG_ECE | TCP_FLAG_CWR));
-			continue;
-		}
-
-		if (num_found++ > 0 || aggressive)
+		if (num_found++ > 0)
 			goto found;
 	}
+
+	/* We made it through the queue without finding two eligible ACKs . If
+	 * we found a single eligible ACK we can drop it in aggressive mode if
+	 * we can guarantee that this does not interfere with ECN flag
+	 * information. We ensure this by dropping it only if the enqueued
+	 * packet is consecutive with the eligible ACK, and their flags match.
+	 */
+	if (elig_ack && aggressive && elig_ack->next == skb &&
+	    (elig_flags == (tcp_flag_word(tcph) & (TCP_FLAG_ECE | TCP_FLAG_CWR)))
+		goto found;
 
 	return NULL;
 
