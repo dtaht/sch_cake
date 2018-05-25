@@ -3030,3 +3030,11 @@ module_exit(cake_module_exit)
 MODULE_AUTHOR("Jonathan Morton");
 MODULE_LICENSE("Dual BSD/GPL");
 MODULE_DESCRIPTION("The CAKE shaper.");
+
+static unsigned int max_tins = CAKE_MAX_TINS;
+module_param(max_tins, uint, 0444);
+MODULE_PARM_DESC(max_tins, "Maximum number of priority tins available");
+
+static unsigned int max_queues = CAKE_QUEUES;
+module_param(max_queues, uint, 0444);
+MODULE_PARM_DESC(max_queues, "Maximum number of flow queues available");
