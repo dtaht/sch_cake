@@ -2471,8 +2471,8 @@ static int cake_change(struct Qdisc *sch, struct nlattr *opt,
 		q->flow_mode |= CAKE_FLOW_NAT_FLAG *
 			!!nla_get_u32(tb[TCA_CAKE_NAT]);
 #else
-		NL_SET_ERR_MSG_ATTR(extack, "No conntrack support in kernel",
-				    tb[TCA_CAKE_NAT]);
+		NL_SET_ERR_MSG_ATTR(extack, tb[TCA_CAKE_NAT],
+				    "No conntrack support in kernel");
 		return -EOPNOTSUPP;
 #endif
 	}
