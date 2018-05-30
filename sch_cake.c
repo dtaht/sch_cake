@@ -890,39 +890,6 @@ found_dst:
 	return reduced_hash;
 }
 
-static u32 cake_classify(struct Qdisc *sch, struct cake_tin_data *t,
-			 struct sk_buff *skb, int flow_mode, int *qerr)
-{
-	struct cake_sched_data *q = qdisc_priv(sch);
-	struct tcf_proto *filter;
-	struct tcf_result res;
-	int result;
-
-	filter = rcu_dereference_bh(q->filter_list);
-	if (!filter)
-		return cake_hash(t, skb, flow_mode) + 1;
-
-	*qerr = NET_XMIT_SUCCESS | __NET_XMIT_BYPASS;
-	result = tcf_classify(skb, filter, &res, false);
-	if (result >= 0) {
-#ifdef CONFIG_NET_CLS_ACT
-		switch (result) {
-		case TC_ACT_STOLEN:
-		case TC_ACT_QUEUED:
-		case TC_ACT_TRAP:
-			*qerr = NET_XMIT_SUCCESS | __NET_XMIT_STOLEN;
-			/* fall through */
-		case TC_ACT_SHOT:
-			return 0;
-		}
-#endif
-		if (TC_H_MIN(res.classid) <= CAKE_QUEUES)
-			return TC_H_MIN(res.classid);
-	}
-	return 0;
-}
-
-
 /* helper functions : might be changed when/if skb use a standard list_head */
 /* remove one skb from head of slot queue */
 
@@ -1673,19 +1640,11 @@ static u8 cake_handle_diffserv(struct sk_buff *skb, u16 wash)
 	}
 }
 
-static void cake_reconfigure(struct Qdisc *sch);
-
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 8, 0)
-static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
-#else
-static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
-			struct sk_buff **to_free)
-#endif
+static struct cake_tin_data *cake_select_tin(struct Qdisc *sch,
+					     struct sk_buff *skb)
 {
 	struct cake_sched_data *q = qdisc_priv(sch);
-	int len = qdisc_pkt_len(skb);
-	struct sk_buff *ack = NULL;
-	int uninitialized_var(ret);
+	u32 tin;
 
 	if (TC_H_MAJ(skb->priority) == sch->handle &&
 	    TC_H_MIN(skb->priority) > 0 &&
@@ -1707,10 +1666,65 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 			cake_wash_diffserv(skb);
 	}
 
-	b = &q->tins[tin];
+	return &q->tins[tin];
+}
+
+static u32 cake_classify(struct Qdisc *sch, struct cake_tin_data **t,
+			 struct sk_buff *skb, int flow_mode, int *qerr)
+{
+	struct cake_sched_data *q = qdisc_priv(sch);
+	struct tcf_proto *filter;
+	struct tcf_result res;
+	u32 flow = 0;
+	int result;
+
+	filter = rcu_dereference_bh(q->filter_list);
+	if (!filter)
+		goto hash;
+
+	*qerr = NET_XMIT_SUCCESS | __NET_XMIT_BYPASS;
+	result = tcf_classify(skb, filter, &res, false);
+
+	if (result >= 0) {
+#ifdef CONFIG_NET_CLS_ACT
+		switch (result) {
+		case TC_ACT_STOLEN:
+		case TC_ACT_QUEUED:
+		case TC_ACT_TRAP:
+			*qerr = NET_XMIT_SUCCESS | __NET_XMIT_STOLEN;
+			/* fall through */
+		case TC_ACT_SHOT:
+			return 0;
+		}
+#endif
+		if (TC_H_MIN(res.classid) <= CAKE_QUEUES)
+			flow = TC_H_MIN(res.classid);
+	}
+hash:
+	*t = cake_select_tin(sch, skb);
+	return flow ?: cake_hash(*t, skb, flow_mode) + 1;
+}
+
+static void cake_reconfigure(struct Qdisc *sch);
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 8, 0)
+static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
+#else
+static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
+			struct sk_buff **to_free)
+#endif
+{
+	struct cake_sched_data *q = qdisc_priv(sch);
+	int len = qdisc_pkt_len(skb);
+	int uninitialized_var(ret);
+	struct sk_buff *ack = NULL;
+	ktime_t now = ktime_get();
+	struct cake_tin_data *b;
+	struct cake_flow *flow;
+	u32 idx;
 
 	/* choose flow to insert into */
-	idx = cake_classify(sch, b, skb, q->flow_mode, &ret);
+	idx = cake_classify(sch, &b, skb, q->flow_mode, &ret);
 	if (idx == 0) {
 		if (ret & __NET_XMIT_BYPASS)
 			qdisc_qstats_drop(sch);
