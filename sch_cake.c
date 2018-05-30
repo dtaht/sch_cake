@@ -2596,6 +2596,8 @@ static int cake_init(struct Qdisc *sch, struct nlattr *opt,
 	q->cur_tin = 0;
 	q->cur_flow  = 0;
 
+	qdisc_watchdog_init(&q->watchdog, sch);
+
 	if (opt) {
 		int err = cake_change(sch, opt, extack);
 
@@ -2606,8 +2608,6 @@ static int cake_init(struct Qdisc *sch, struct nlattr *opt,
 	err = tcf_block_get(&q->block, &q->filter_list, sch, extack);
 	if (err)
 		return err;
-
-	qdisc_watchdog_init(&q->watchdog, sch);
 
 	quantum_div[0] = ~0;
 	for (i = 1; i <= CAKE_QUEUES; i++)
