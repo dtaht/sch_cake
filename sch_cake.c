@@ -1912,7 +1912,7 @@ begin:
 
 				if (ktime_to_ns(time_to_pkt) <= 0 ||
 				    ktime_compare(time_to_pkt,
-					          best_time) <= 0) {
+						  best_time) <= 0) {
 					best_time = time_to_pkt;
 					best_tin = tin;
 				}
@@ -2943,9 +2943,10 @@ static void cake_walk(struct Qdisc *sch, struct qdisc_walker *arg)
 
 	for (i = 0; i < q->tin_cnt; i++) {
 		struct cake_tin_data *b = &q->tins[q->tin_order[i]];
+
 		for (j = 0; j < CAKE_QUEUES; j++) {
 			if (list_empty(&b->flows[j].flowchain) ||
-				arg->count < arg->skip) {
+			    arg->count < arg->skip) {
 				arg->count++;
 				continue;
 			}
