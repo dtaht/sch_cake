@@ -929,8 +929,8 @@ static struct tcphdr *cake_get_tcphdr(const struct sk_buff *skb,
 				  min(__tcp_hdrlen(tcph), bufsize), buf);
 }
 
-static const u8 *cake_get_tcpopt(const struct tcphdr *tcph,
-				int code, int *oplen)
+static const void *cake_get_tcpopt(const struct tcphdr *tcph,
+				   int code, int *oplen)
 {
 	/* inspired by tcp_parse_options in tcp_input.c */
 	int length = __tcp_hdrlen(tcph) - sizeof(struct tcphdr);
@@ -964,71 +964,73 @@ static const u8 *cake_get_tcpopt(const struct tcphdr *tcph,
 
 /* Compare two SACK sequences. A sequence is considered greater if it SACKs more
  * bytes than the other. In the case where both sequences ACKs bytes that the
- * other doesn't, A is considered greater.
+ * other doesn't, A is considered greater. DSACKs in A also makes A be
+ * considered greater.
  *
  * @return -1, 0 or 1 as normal compare functions
  */
 static int cake_tcph_sack_compare(const struct tcphdr *tcph_a,
 				  const struct tcphdr *tcph_b)
 {
-	u64 bytes_a = 0, bytes_b = 0;
-	const u8 *sack_a, *sack_b;
+	const struct tcp_sack_block_wire *sack_a, *sack_b;
+	u32 ack_seq_a = ntohl(tcph_a->ack_seq);
+	u32 bytes_a = 0, bytes_b = 0;
 	int oplen_a, oplen_b;
 	bool first = true;
 
 	sack_a = cake_get_tcpopt(tcph_a, TCPOPT_SACK, &oplen_a);
 	sack_b = cake_get_tcpopt(tcph_b, TCPOPT_SACK, &oplen_b);
 
-	if (sack_a && !sack_b)
+	/* pointers point to option contents */
+	oplen_a -= TCPOLEN_SACK_BASE;
+	oplen_b -= TCPOLEN_SACK_BASE;
+
+	if (sack_a && oplen_a >= sizeof(*sack_a) &&
+	    (!sack_b || oplen_b < sizeof(*sack_b)))
 		return -1;
-	else if (sack_b && !sack_a)
+	else if (sack_b && oplen_b >= sizeof(*sack_b) &&
+		 (!sack_a || oplen_a < sizeof(*sack_a)))
 		return 1;
-	else if (!sack_a && !sack_b)
+	else if ((!sack_a || oplen_a < sizeof(*sack_a)) &&
+		 (!sack_b || oplen_b < sizeof(*sack_b)))
 		return 0;
 
-	/* pointer has already advanced past opcode and length bytes */
-	oplen_a -= 2;
-
-	while (oplen_a >= 8) {
-		u32 right_a = get_unaligned_be32(sack_a + 4);
-		u32 left_a = get_unaligned_be32(sack_a);
-		const u8 *sack_tmp = sack_b;
-		int oplen_tmp = oplen_b - 2;
+	while (oplen_a >= sizeof(*sack_a)) {
+		const struct tcp_sack_block_wire *sack_tmp = sack_b;
+		u32 start_a = get_unaligned_be32(&sack_a->start_seq);
+		u32 end_a = get_unaligned_be32(&sack_a->end_seq);
+		int oplen_tmp = oplen_b;
 		bool found = false;
 
+		/* DSACK; always considered greater to prevent dropping */
+		if (before(start_a, ack_seq_a))
+			return -1;
 
-		/* invalid or empty SACK range; ignore */
-		if (left_a >= right_a)
-			continue;
+		bytes_a += end_a - start_a;
 
-		bytes_a += right_a - left_a;
+		while (oplen_tmp >= sizeof(*sack_tmp)) {
+			u32 start_b = get_unaligned_be32(&sack_tmp->start_seq);
+			u32 end_b = get_unaligned_be32(&sack_tmp->end_seq);
 
-		while (oplen_tmp >= 8) {
-			u32 right_b = get_unaligned_be32(sack_tmp + 4);
-			u32 left_b = get_unaligned_be32(sack_tmp);
-
-			if (left_b >= right_b)
-				continue;
-
+			/* first time through we count the total size */
 			if (first)
-				bytes_b += right_b - left_b;
+				bytes_b += end_b - start_b;
 
-			if (left_b <= left_a && right_a <= right_b) {
+			if (!after(start_b, start_a) && !before(end_b, end_a)) {
 				found = true;
 				if (!first)
 					break;
 			}
-			oplen_tmp -= 8;
-			sack_tmp += 8;
+			oplen_tmp -= sizeof(*sack_tmp);
+			sack_tmp++;
 		}
-
-		first = false;
 
 		if (!found)
 			return -1;
 
-		oplen_a -= 8;
-		sack_a += 8;
+		oplen_a -= sizeof(*sack_a);
+		sack_a++;
+		first = false;
 	}
 
 	/* If we made it this far, all ranges SACKed by A are covered by B, so
@@ -1060,15 +1062,15 @@ static bool cake_tcph_may_drop(const struct tcphdr *tcph,
 	u32 tstamp, tsecr;
 
 	/* 3 reserved flags must be unset to avoid future breakage
-	 * ECE/CWR/NS can be safely ignored
 	 * ACK must be set
+	 * ECE/CWR are handled separately
 	 * All other flags URG/PSH/RST/SYN/FIN must be unset
 	 * 0x0FFF0000 = all TCP flags (confirm ACK=1, others zero)
-	 * 0x01C00000 = NS/CWR/ECE (safe to ignore)
-	 * 0x0E3F0000 = 0x0FFF0000 & ~0x01C00000
+	 * 0x00C00000 = CWR/ECE (handled separately)
+	 * 0x0F3F0000 = 0x0FFF0000 & ~0x00C00000
 	 */
 	if (((tcp_flag_word(tcph) &
-	      cpu_to_be32(0x0E3F0000)) != TCP_FLAG_ACK))
+	      cpu_to_be32(0x0F3F0000)) != TCP_FLAG_ACK))
 		return false;
 
 	while (length > 0) {
@@ -1100,7 +1102,8 @@ static bool cake_tcph_may_drop(const struct tcphdr *tcph,
 				return false;
 			tstamp = get_unaligned_be32(ptr);
 			tsecr = get_unaligned_be32(ptr + 4);
-			if (tstamp > tstamp_new || tsecr > tsecr_new)
+			if (after(tstamp, tstamp_new) ||
+			    after(tsecr, tsecr_new))
 				return false;
 			break;
 
@@ -1134,6 +1137,7 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 	const struct sk_buff *skb;
 	int seglen, num_found = 0;
 	u32 tstamp = 0, tsecr = 0;
+	__be32 elig_flags = 0;
 	int sack_comp;
 
 	/* no other possible ACKs to filter */
@@ -1167,12 +1171,12 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 		tcph_check = cake_get_tcphdr(skb_check, &_tcph_check,
 					     sizeof(_tcph_check));
 
-		/* only TCP packets with matching 5-tuple are eligible, and
-		 * never drop a SACK */
+		/* only TCP packets with matching 5-tuple are eligible, and only
+		 * drop safe headers
+		 */
 		if (!tcph_check || iph->version != iph_check->version ||
 		    tcph_check->source != tcph->source ||
-		    tcph_check->dest != tcph->dest ||
-		    !cake_tcph_may_drop(tcph_check, tstamp, tsecr))
+		    tcph_check->dest != tcph->dest)
 			continue;
 
 		if (iph_check->version == 4) {
@@ -1196,14 +1200,26 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 			continue;
 		}
 
-		/* Don't drop ACKs with segment data, and don't drop ACKs higher
-		 * cumulative ACK counter than triggering packet. Check ACK
-		 * seqno here to avoid parsing SACK options of packets we are
-		 * going to exclude anyway.
+		/* If the ECE/CWR flags changed from the previous eligible
+		 * packet in the same flow, we should no longer be dropping that
+		 * previous packet as this would lose information.
 		 */
-		if ((seglen - __tcp_hdrlen(tcph_check)) != 0 ||
-		    (int32_t)(ntohl(tcph_check->ack_seq) -
-  			      ntohl(tcph->ack_seq)) > 0)
+		if (elig_ack && (tcp_flag_word(tcph_check) &
+				 (TCP_FLAG_ECE | TCP_FLAG_CWR)) != elig_flags) {
+			elig_ack = NULL;
+			elig_ack_prev = NULL;
+			num_found--;
+		}
+
+		/* Check TCP options and flags, don't drop ACKs with segment
+		 * data, and don't drop ACKs with a higher cumulative ACK
+		 * counter than the triggering packet. Check ACK seqno here to
+		 * avoid parsing SACK options of packets we are going to exclude
+		 * anyway.
+		 */
+		if (!cake_tcph_may_drop(tcph_check, tstamp, tsecr) ||
+		    (seglen - __tcp_hdrlen(tcph_check)) != 0 ||
+		    after(ntohl(tcph_check->ack_seq), ntohl(tcph->ack_seq)))
 			continue;
 
 		/* Check SACK options. The triggering packet must SACK more data
@@ -1231,11 +1247,23 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 		if (!elig_ack) {
 			elig_ack = skb_check;
 			elig_ack_prev = skb_prev;
+			elig_flags = (tcp_flag_word(tcph_check)
+				      & (TCP_FLAG_ECE | TCP_FLAG_CWR));
 		}
 
-		if (num_found++ > 0 || aggressive)
+		if (num_found++ > 0)
 			goto found;
 	}
+
+	/* We made it through the queue without finding two eligible ACKs . If
+	 * we found a single eligible ACK we can drop it in aggressive mode if
+	 * we can guarantee that this does not interfere with ECN flag
+	 * information. We ensure this by dropping it only if the enqueued
+	 * packet is consecutive with the eligible ACK, and their flags match.
+	 */
+	if (elig_ack && aggressive && elig_ack->next == skb &&
+	    (elig_flags == (tcp_flag_word(tcph) & (TCP_FLAG_ECE | TCP_FLAG_CWR))))
+		goto found;
 
 	return NULL;
 
