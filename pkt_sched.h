@@ -861,6 +861,7 @@ struct tc_pie_xstats {
 /* CAKE */
 enum {
 	TCA_CAKE_UNSPEC,
+	TCA_CAKE_PAD,
 	TCA_CAKE_BASE_RATE64,
 	TCA_CAKE_DIFFSERV_MODE,
 	TCA_CAKE_ATM,
