@@ -2654,6 +2654,8 @@ static int cake_init(struct Qdisc *sch, struct nlattr *opt,
 	q->cur_tin = 0;
 	q->cur_flow  = 0;
 
+	qdisc_watchdog_init(&q->watchdog, sch);
+
 	if (opt) {
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 16, 0)
 		int err = cake_change(sch, opt);
@@ -2664,8 +2666,6 @@ static int cake_init(struct Qdisc *sch, struct nlattr *opt,
 		if (err)
 			return err;
 	}
-
-	qdisc_watchdog_init(&q->watchdog, sch);
 
 	quantum_div[0] = ~0;
 	for (i = 1; i <= CAKE_QUEUES; i++)
