@@ -2549,7 +2549,9 @@ static int cake_change(struct Qdisc *sch, struct nlattr *opt,
 	}
 
 	if (tb[TCA_CAKE_FLOW_MODE])
-		q->flow_mode = nla_get_u32(tb[TCA_CAKE_FLOW_MODE]);
+		q->flow_mode = (q->flow_mode & CAKE_FLOW_NAT_FLAG) |
+			(nla_get_u32(tb[TCA_CAKE_FLOW_MODE]) &
+				~CAKE_FLOW_NAT_FLAG);
 
 	if (tb[TCA_CAKE_OVERHEAD]) {
 		q->rate_overhead = nla_get_s32(tb[TCA_CAKE_OVERHEAD]);
