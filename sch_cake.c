@@ -2519,8 +2519,9 @@ static int cake_change(struct Qdisc *sch, struct nlattr *opt,
 	}
 
 	if (tb[TCA_CAKE_FLOW_MODE])
-		q->flow_mode = (nla_get_u32(tb[TCA_CAKE_FLOW_MODE]) &
-				CAKE_FLOW_MASK);
+		q->flow_mode = (q->flow_mode & CAKE_FLOW_NAT_FLAG) |
+			(nla_get_u32(tb[TCA_CAKE_FLOW_MODE]) &
+				~CAKE_FLOW_NAT_FLAG);
 
 	if (tb[TCA_CAKE_ATM])
 		q->atm_mode = nla_get_u32(tb[TCA_CAKE_ATM]);
