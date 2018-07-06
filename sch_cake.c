@@ -1929,14 +1929,14 @@ begin:
 		/* In unlimited mode, can't rely on shaper timings, just balance
 		 * with DRR
 		 */
-		bool wrapped = 0, empty = 1;
+		bool wrapped = false, empty = true;
 
 		while (b->tin_deficit < 0 ||
 		       !(b->sparse_flow_count + b->bulk_flow_count)) {
 			if (b->tin_deficit <= 0)
 				b->tin_deficit += b->tin_quantum_band;
 			if (b->sparse_flow_count + b->bulk_flow_count)
-				empty = 0;
+				empty = false;
 
 			q->cur_tin++;
 			b++;
@@ -1944,14 +1944,14 @@ begin:
 				q->cur_tin = 0;
 				b = q->tins;
 
-				if(wrapped) {
+				if (wrapped) {
 					/* It's possible for q->qlen to be nonzero when
 					 * we actually have no packets anywhere.
 					 */
-					if(empty)
+					if (empty)
 						return NULL;
 				} else {
-					wrapped = 1;
+					wrapped = true;
 				}
 			}
 		}
@@ -1982,7 +1982,7 @@ begin:
 		b = q->tins + best_tin;
 
 		/* No point in going further if no packets to deliver. */
-		if (!(b->sparse_flow_count + b->bulk_flow_count))
+		if (unlikely(!(b->sparse_flow_count + b->bulk_flow_count)))
 			return NULL;
 	}
 
