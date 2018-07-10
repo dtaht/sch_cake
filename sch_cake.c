@@ -1604,7 +1604,7 @@ static u32 cake_classify(struct Qdisc *sch, struct cake_tin_data **t,
 	struct cake_sched_data *q = qdisc_priv(sch);
 	struct tcf_proto *filter;
 	struct tcf_result res;
-	u32 flow = 0;
+	u32 flow = TC_H_ROOT;
 	int result;
 
 	filter = rcu_dereference_bh(q->filter_list);
@@ -1626,12 +1626,13 @@ static u32 cake_classify(struct Qdisc *sch, struct cake_tin_data **t,
 			return 0;
 		}
 #endif
-		if (TC_H_MIN(res.classid) <= CAKE_QUEUES)
+		if (TC_H_MAJ(res.classid) == sch->handle &&
+		    TC_H_MIN(res.classid) <= CAKE_QUEUES)
 			flow = TC_H_MIN(res.classid);
 	}
 hash:
 	*t = cake_select_tin(sch, skb);
-	return flow ?: cake_hash(*t, skb, flow_mode) + 1;
+	return (flow != TC_H_ROOT) ? flow : cake_hash(*t, skb, flow_mode) + 1;
 }
 
 static void cake_reconfigure(struct Qdisc *sch);
@@ -3048,3 +3049,11 @@ module_exit(cake_module_exit)
 MODULE_AUTHOR("Jonathan Morton");
 MODULE_LICENSE("Dual BSD/GPL");
 MODULE_DESCRIPTION("The CAKE shaper.");
+
+static unsigned int max_tins = CAKE_MAX_TINS;
+module_param(max_tins, uint, 0444);
+MODULE_PARM_DESC(max_tins, "Maximum number of priority tins available");
+
+static unsigned int max_queues = CAKE_QUEUES;
+module_param(max_queues, uint, 0444);
+MODULE_PARM_DESC(max_queues, "Maximum number of flow queues available");
