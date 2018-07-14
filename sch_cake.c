@@ -2774,8 +2774,6 @@ static int cake_init(struct Qdisc *sch, struct nlattr *opt,
 		return err;
 #endif
 
-	qdisc_watchdog_init(&q->watchdog, sch);
-
 	quantum_div[0] = ~0;
 	for (i = 1; i <= CAKE_QUEUES; i++)
 		quantum_div[i] = 65535 / i;
