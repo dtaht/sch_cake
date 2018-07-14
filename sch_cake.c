@@ -65,8 +65,9 @@
 #include <linux/vmalloc.h>
 #include <linux/reciprocal_div.h>
 #include <net/netlink.h>
-#include <linux/version.h>
 #include "pkt_sched.h"
+#include <net/pkt_cls.h>
+#include <linux/version.h>
 #include <linux/if_vlan.h>
 #include <net/tcp.h>
 #include <net/inet_ecn.h>
@@ -144,6 +145,7 @@ struct cake_flow {
 	struct sk_buff	  *tail;
 	struct list_head  flowchain;
 	s32		  deficit;
+	u32		  dropped;
 	struct cobalt_vars cvars;
 	u16		  srchost; /* index into cake_host table */
 	u16		  dsthost;
@@ -214,6 +216,10 @@ struct cake_tin_data {
 }; /* number of tins is small, so size of this struct doesn't matter much */
 
 struct cake_sched_data {
+	struct tcf_proto __rcu *filter_list; /* optional external classifier */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 12, 0)
+	struct tcf_block *block;
+#endif
 	struct cake_tin_data *tins;
 
 	struct cake_heap_entry overflow_heap[CAKE_QUEUES * CAKE_MAX_TINS];
@@ -1577,6 +1583,7 @@ static unsigned int cake_drop(struct Qdisc *sch, struct sk_buff **to_free)
 	sch->qstats.backlog -= len;
 	qdisc_tree_reduce_backlog(sch, 1, len);
 
+	flow->dropped++;
 	b->tin_dropped++;
 	sch->qstats.drops++;
 
@@ -1635,6 +1642,77 @@ static u8 cake_handle_diffserv(struct sk_buff *skb, u16 wash)
 	}
 }
 
+static struct cake_tin_data *cake_select_tin(struct Qdisc *sch,
+					     struct sk_buff *skb)
+{
+	struct cake_sched_data *q = qdisc_priv(sch);
+	u32 tin;
+
+	if (TC_H_MAJ(skb->priority) == sch->handle &&
+	    TC_H_MIN(skb->priority) > 0 &&
+	    TC_H_MIN(skb->priority) <= q->tin_cnt) {
+		tin = TC_H_MIN(skb->priority) - 1;
+
+		if (q->rate_flags & CAKE_FLAG_WASH)
+			cake_wash_diffserv(skb);
+	} else if (q->tin_mode != CAKE_DIFFSERV_BESTEFFORT) {
+		/* extract the Diffserv Precedence field, if it exists */
+		/* and clear DSCP bits if washing */
+		tin = q->tin_index[cake_handle_diffserv(skb,
+				q->rate_flags & CAKE_FLAG_WASH)];
+		if (unlikely(tin >= q->tin_cnt))
+			tin = 0;
+	} else {
+		tin = 0;
+		if (q->rate_flags & CAKE_FLAG_WASH)
+			cake_wash_diffserv(skb);
+	}
+
+	return &q->tins[tin];
+}
+
+static u32 cake_classify(struct Qdisc *sch, struct cake_tin_data **t,
+			 struct sk_buff *skb, int flow_mode, int *qerr)
+{
+	struct cake_sched_data *q = qdisc_priv(sch);
+	struct tcf_proto *filter;
+	struct tcf_result res;
+	u32 flow = 0;
+	int result;
+
+	filter = rcu_dereference_bh(q->filter_list);
+	if (!filter)
+		goto hash;
+
+	*qerr = NET_XMIT_SUCCESS | __NET_XMIT_BYPASS;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 12, 0)
+	result = tc_classify(skb, filter, &res, false);
+#else
+	result = tcf_classify(skb, filter, &res, false);
+#endif
+
+	if (result >= 0) {
+#ifdef CONFIG_NET_CLS_ACT
+		switch (result) {
+		case TC_ACT_STOLEN:
+		case TC_ACT_QUEUED:
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 12, 0)
+		case TC_ACT_TRAP:
+#endif
+			*qerr = NET_XMIT_SUCCESS | __NET_XMIT_STOLEN;
+			/* fall through */
+		case TC_ACT_SHOT:
+			return 0;
+		}
+#endif
+		if (TC_H_MIN(res.classid) <= CAKE_QUEUES)
+			flow = TC_H_MIN(res.classid);
+	}
+hash:
+	*t = cake_select_tin(sch, skb);
+	return flow ?: cake_hash(*t, skb, flow_mode) + 1;
+}
+
 static void cake_reconfigure(struct Qdisc *sch);
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 8, 0)
@@ -1646,29 +1724,22 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 {
 	struct cake_sched_data *q = qdisc_priv(sch);
 	int len = qdisc_pkt_len(skb);
+	int uninitialized_var(ret);
 	struct sk_buff *ack = NULL;
 	ktime_t now = ktime_get();
 	struct cake_tin_data *b;
 	struct cake_flow *flow;
-	u32 idx, tin;
-
-	/* extract the Diffserv Precedence field, if it exists */
-	/* and clear DSCP bits if washing */
-	if (q->tin_mode != CAKE_DIFFSERV_BESTEFFORT) {
-		tin = q->tin_index[cake_handle_diffserv(skb,
-				q->rate_flags & CAKE_FLAG_WASH)];
-		if (unlikely(tin >= q->tin_cnt))
-			tin = 0;
-	} else {
-		tin = 0;
-		if (q->rate_flags & CAKE_FLAG_WASH)
-			cake_wash_diffserv(skb);
-	}
-
-	b = &q->tins[tin];
+	u32 idx;
 
 	/* choose flow to insert into */
-	idx = cake_hash(b, skb, q->flow_mode);
+	idx = cake_classify(sch, &b, skb, q->flow_mode, &ret);
+	if (idx == 0) {
+		if (ret & __NET_XMIT_BYPASS)
+			qdisc_qstats_drop(sch);
+		__qdisc_drop(skb, to_free);
+		return ret;
+	}
+	idx--;
 	flow = &b->flows[idx];
 
 	/* ensure shaper state isn't stale */
@@ -2101,6 +2172,7 @@ retry:
 			flow->deficit -= len;
 			b->tin_deficit -= len;
 		}
+		flow->dropped++;
 		b->tin_dropped++;
 		qdisc_tree_reduce_backlog(sch, 1, qdisc_pkt_len(skb));
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 8, 0)
@@ -2647,6 +2719,11 @@ static void cake_destroy(struct Qdisc *sch)
 	struct cake_sched_data *q = qdisc_priv(sch);
 
 	qdisc_watchdog_cancel(&q->watchdog);
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 12, 0)
+	tcf_destroy_chain(&q->filter_list);
+#else
+	tcf_block_put(q->block);
+#endif
 	kvfree(q->tins);
 }
 
@@ -2658,7 +2735,7 @@ static int cake_init(struct Qdisc *sch, struct nlattr *opt,
 #endif
 {
 	struct cake_sched_data *q = qdisc_priv(sch);
-	int i, j;
+	int i, j, err;
 
 	sch->limit = 10240;
 	q->tin_mode = CAKE_DIFFSERV_DIFFSERV3;
@@ -2678,14 +2755,26 @@ static int cake_init(struct Qdisc *sch, struct nlattr *opt,
 
 	if (opt) {
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 16, 0)
-		int err = cake_change(sch, opt);
+		err = cake_change(sch, opt);
 #else
-		int err = cake_change(sch, opt, extack);
+		err = cake_change(sch, opt, extack);
 #endif
 
 		if (err)
 			return err;
 	}
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 12, 0)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 16, 0)
+	err = tcf_block_get(&q->block, &q->filter_list);
+#else
+	err = tcf_block_get(&q->block, &q->filter_list, sch, extack);
+#endif
+	if (err)
+		return err;
+#endif
+
+	qdisc_watchdog_init(&q->watchdog, sch);
 
 	quantum_div[0] = ~0;
 	for (i = 1; i <= CAKE_QUEUES; i++)
@@ -2901,7 +2990,177 @@ nla_put_failure:
 	return -1;
 }
 
+static struct Qdisc *cake_leaf(struct Qdisc *sch, unsigned long arg)
+{
+	return NULL;
+}
+
+static unsigned long cake_find(struct Qdisc *sch, u32 classid)
+{
+	return 0;
+}
+
+static unsigned long cake_bind(struct Qdisc *sch, unsigned long parent,
+			      u32 classid)
+{
+	return 0;
+}
+
+static void cake_unbind(struct Qdisc *q, unsigned long cl)
+{
+}
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 12, 0)
+static struct tcf_proto __rcu **cake_find_tcf(struct Qdisc *sch, unsigned long cl)
+#else
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 16, 0)
+static struct tcf_block *cake_tcf_block(struct Qdisc *sch, unsigned long cl)
+#else
+static struct tcf_block *cake_tcf_block(struct Qdisc *sch, unsigned long cl,
+					    struct netlink_ext_ack *extack)
+#endif
+#endif
+{
+	struct cake_sched_data *q = qdisc_priv(sch);
+
+	if (cl)
+		return NULL;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 12, 0)
+	return &q->filter_list;
+#else
+	return q->block;
+#endif
+}
+
+static int cake_dump_class(struct Qdisc *sch, unsigned long cl,
+			   struct sk_buff *skb, struct tcmsg *tcm)
+{
+	tcm->tcm_handle |= TC_H_MIN(cl);
+	return 0;
+}
+
+static int cake_dump_class_stats(struct Qdisc *sch, unsigned long cl,
+				 struct gnet_dump *d)
+{
+	struct cake_sched_data *q = qdisc_priv(sch);
+	const struct cake_flow *flow = NULL;
+	struct gnet_stats_queue qs = { 0 };
+	struct nlattr *stats;
+	u32 idx = cl - 1;
+
+	if (idx < CAKE_QUEUES * q->tin_cnt) {
+		const struct cake_tin_data *b = \
+			&q->tins[q->tin_order[idx / CAKE_QUEUES]];
+		const struct sk_buff *skb;
+
+		flow = &b->flows[idx % CAKE_QUEUES];
+
+		if (flow->head) {
+			sch_tree_lock(sch);
+			skb = flow->head;
+			while (skb) {
+				qs.qlen++;
+				skb = skb->next;
+			}
+			sch_tree_unlock(sch);
+		}
+		qs.backlog = b->backlogs[idx % CAKE_QUEUES];
+		qs.drops = flow->dropped;
+	}
+	if (gnet_stats_copy_queue(d, NULL, &qs, qs.qlen) < 0)
+		return -1;
+	if (flow) {
+		ktime_t now = ktime_get();
+
+		stats = nla_nest_start(d->skb, TCA_STATS_APP);
+		if (!stats)
+			return -1;
+
+#define PUT_STAT_U32(attr, data) do {				       \
+		if (nla_put_u32(d->skb, TCA_CAKE_STATS_ ## attr, data)) \
+			goto nla_put_failure;			       \
+	} while (0)
+#define PUT_STAT_S32(attr, data) do {				       \
+		if (nla_put_s32(d->skb, TCA_CAKE_STATS_ ## attr, data)) \
+			goto nla_put_failure;			       \
+	} while (0)
+
+		PUT_STAT_S32(DEFICIT, flow->deficit);
+		PUT_STAT_U32(DROPPING, flow->cvars.dropping);
+		PUT_STAT_U32(COBALT_COUNT, flow->cvars.count);
+		PUT_STAT_U32(P_DROP, flow->cvars.p_drop);
+		if (flow->cvars.p_drop) {
+			PUT_STAT_S32(BLUE_TIMER_US,
+				     ktime_to_us(
+					     ktime_sub(now,
+						       flow->cvars.blue_timer)));
+		}
+		if (flow->cvars.dropping) {
+			PUT_STAT_S32(DROP_NEXT_US,
+				     ktime_to_us(
+					     ktime_sub(now,
+						       flow->cvars.drop_next)));
+		}
+
+		if (nla_nest_end(d->skb, stats) < 0)
+			return -1;
+	}
+
+	return 0;
+
+nla_put_failure:
+	nla_nest_cancel(d->skb, stats);
+	return -1;
+}
+
+static void cake_walk(struct Qdisc *sch, struct qdisc_walker *arg)
+{
+	struct cake_sched_data *q = qdisc_priv(sch);
+	unsigned int i, j;
+
+	if (arg->stop)
+		return;
+
+	for (i = 0; i < q->tin_cnt; i++) {
+		struct cake_tin_data *b = &q->tins[q->tin_order[i]];
+		for (j = 0; j < CAKE_QUEUES; j++) {
+			if (list_empty(&b->flows[j].flowchain) ||
+				arg->count < arg->skip) {
+				arg->count++;
+				continue;
+			}
+			if (arg->fn(sch, i * CAKE_QUEUES + j + 1, arg) < 0) {
+				arg->stop = 1;
+				break;
+			}
+			arg->count++;
+		}
+	}
+}
+
+
+static const struct Qdisc_class_ops cake_class_ops = {
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 12, 0)
+	.tcf_chain	=	cake_find_tcf,
+#else
+	.tcf_block	=	cake_tcf_block,
+#endif
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 13, 0)
+	.get		=	cake_find,
+	.put		=	cake_unbind,
+#else
+	.find		=	cake_find,
+#endif
+	.unbind_tcf	=	cake_unbind,
+	.bind_tcf	=	cake_bind,
+	.leaf		=	cake_leaf,
+	.dump		=	cake_dump_class,
+	.dump_stats	=	cake_dump_class_stats,
+	.walk		=	cake_walk,
+};
+
 static struct Qdisc_ops cake_qdisc_ops __read_mostly = {
+	.cl_ops		=	&cake_class_ops,
 	.id		=	"cake",
 	.priv_size	=	sizeof(struct cake_sched_data),
 	.enqueue	=	cake_enqueue,
