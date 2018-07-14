@@ -2752,7 +2752,11 @@ static int cake_init(struct Qdisc *sch, struct nlattr *opt,
 			return err;
 	}
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 16, 0)
+	err = tcf_block_get(&q->block, &q->filter_list);
+#else
 	err = tcf_block_get(&q->block, &q->filter_list, sch, extack);
+#endif
 	if (err)
 		return err;
 
@@ -2992,8 +2996,12 @@ static void cake_unbind(struct Qdisc *q, unsigned long cl)
 {
 }
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 16, 0)
+static struct tcf_block *cake_tcf_block(struct Qdisc *sch, unsigned long cl)
+#else
 static struct tcf_block *cake_tcf_block(struct Qdisc *sch, unsigned long cl,
 					    struct netlink_ext_ack *extack)
+#endif
 {
 	struct cake_sched_data *q = qdisc_priv(sch);
 
