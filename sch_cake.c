@@ -2615,8 +2615,8 @@ static int cake_change(struct Qdisc *sch, struct nlattr *opt,
 			!!nla_get_u32(tb[TCA_CAKE_NAT]);
 #else
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 16, 0)
-		NL_SET_ERR_MSG_ATTR(extack, "No conntrack support in kernel",
-				    tb[TCA_CAKE_NAT]);
+		NL_SET_ERR_MSG_ATTR(extack, tb[TCA_CAKE_NAT],
+				    "No conntrack support in kernel");
 #endif
 		return -EOPNOTSUPP;
 #endif
