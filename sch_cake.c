@@ -65,9 +65,9 @@
 #include <linux/reciprocal_div.h>
 #include <net/netlink.h>
 #include <linux/version.h>
-#include <linux/if_vlan.h>
 #include "pkt_sched.h"
 #include <net/pkt_cls.h>
+#include <linux/if_vlan.h>
 #include <net/tcp.h>
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 2, 0)
 #include <net/flow_keys.h>
