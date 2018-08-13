@@ -1708,7 +1708,7 @@ static u32 cake_classify(struct Qdisc *sch, struct cake_tin_data **t,
 	}
 hash:
 	*t = cake_select_tin(sch, skb);
-	return flow ?: cake_hash(*t, skb, flow_mode) + 1;
+	return /* flow ?: */ cake_hash(*t, skb, flow_mode) + 1;
 }
 
 static void cake_reconfigure(struct Qdisc *sch);
