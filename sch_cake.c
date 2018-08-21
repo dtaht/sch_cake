@@ -689,9 +689,9 @@ static bool cake_ddst(int flow_mode)
 }
 
 static u32 cake_hash(struct cake_tin_data *q, const struct sk_buff *skb,
-		     int flow_mode)
+		     int flow_mode, u16 flow_override, u16 host_override)
 {
-	u32 flow_hash = 0, srchost_hash, dsthost_hash;
+	u32 flow_hash = 0, srchost_hash = 0, dsthost_hash = 0;
 	u16 reduced_hash, srchost_idx, dsthost_idx;
 #if KERNEL_VERSION(4, 2, 0) > LINUX_VERSION_CODE
 	struct flow_keys keys;
@@ -701,6 +701,11 @@ static u32 cake_hash(struct cake_tin_data *q, const struct sk_buff *skb,
 
 	if (unlikely(flow_mode == CAKE_FLOW_NONE))
 		return 0;
+
+	/* If both overrides are set we can skip packet dissection entirely */
+	if ((flow_override || !(flow_mode & CAKE_FLOW_FLOWS)) &&
+	    (host_override || !(flow_mode & CAKE_FLOW_HOSTS)))
+		goto skip_hash;
 
 #if KERNEL_VERSION(4, 2, 0) > LINUX_VERSION_CODE
 	skb_flow_dissect(skb, &keys);
@@ -779,6 +784,14 @@ static u32 cake_hash(struct cake_tin_data *q, const struct sk_buff *skb,
 
 		if (flow_mode & CAKE_FLOW_DST_IP)
 			flow_hash ^= dsthost_hash;
+	}
+
+skip_hash:
+	if (flow_override)
+		flow_hash = flow_override - 1;
+	if (host_override) {
+		dsthost_hash = host_override - 1;
+		srchost_hash = host_override - 1;
 	}
 
 	reduced_hash = flow_hash % CAKE_QUEUES;
@@ -1675,7 +1688,7 @@ static u32 cake_classify(struct Qdisc *sch, struct cake_tin_data **t,
 	struct cake_sched_data *q = qdisc_priv(sch);
 	struct tcf_proto *filter;
 	struct tcf_result res;
-	u32 flow = 0;
+	u16 flow = 0, host = 0;
 	int result;
 
 	filter = rcu_dereference_bh(q->filter_list);
@@ -1705,10 +1718,12 @@ static u32 cake_classify(struct Qdisc *sch, struct cake_tin_data **t,
 #endif
 		if (TC_H_MIN(res.classid) <= CAKE_QUEUES)
 			flow = TC_H_MIN(res.classid);
+		if (TC_H_MAJ(res.classid) <= (CAKE_QUEUES << 16))
+			host = TC_H_MAJ(res.classid) >> 16;
 	}
 hash:
 	*t = cake_select_tin(sch, skb);
-	return /* flow ?: */ cake_hash(*t, skb, flow_mode) + 1;
+	return cake_hash(*t, skb, flow_mode, flow, host) + 1;
 }
 
 static void cake_reconfigure(struct Qdisc *sch);
