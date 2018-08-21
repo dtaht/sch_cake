@@ -778,20 +778,20 @@ static u32 cake_hash(struct cake_tin_data *q, const struct sk_buff *skb,
 		flow_hash = flow_hash_from_keys(&keys);
 #endif
 
-	if (!(flow_mode & CAKE_FLOW_FLOWS)) {
-		if (flow_mode & CAKE_FLOW_SRC_IP)
-			flow_hash ^= srchost_hash;
-
-		if (flow_mode & CAKE_FLOW_DST_IP)
-			flow_hash ^= dsthost_hash;
-	}
-
 skip_hash:
 	if (flow_override)
 		flow_hash = flow_override - 1;
 	if (host_override) {
 		dsthost_hash = host_override - 1;
 		srchost_hash = host_override - 1;
+	}
+
+	if (!(flow_mode & CAKE_FLOW_FLOWS)) {
+		if (flow_mode & CAKE_FLOW_SRC_IP)
+			flow_hash ^= srchost_hash;
+
+		if (flow_mode & CAKE_FLOW_DST_IP)
+			flow_hash ^= dsthost_hash;
 	}
 
 	reduced_hash = flow_hash % CAKE_QUEUES;
