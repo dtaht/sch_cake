@@ -74,6 +74,12 @@ static inline void qdisc_qstats_drop(struct Qdisc *sch)
 #define TCPOPT_FASTOPEN	34
 #endif
 
+#if KERNEL_VERSION(4, 3, 0) > LINUX_VERSION_CODE
+#define tcf_classify(_a, _b, _c, _d) tc_classify(_a, _b, _c);
+#elif KERNEL_VERSION(4, 13, 0) > LINUX_VERSION_CODE
+#define tcf_classify(_a, _b, _c, _d) tc_classify(_a, _b, _c, _d);
+#endif
+
 #if !defined(IS_REACHABLE)
 #define IS_REACHABLE(option) (config_enabled(option) || \
 		(config_enabled(option##_MODULE) && config_enabled(MODULE)))
