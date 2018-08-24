@@ -68,6 +68,8 @@ static inline void qdisc_qstats_drop(struct Qdisc *sch)
 	sch->qstats.drops++;
 }
 
+#define gnet_stats_copy_queue(_a, _b, _c, _d) gnet_stats_copy_queue(_a, _c)
+
 #endif
 
 #if KERNEL_VERSION(4, 1, 0) > LINUX_VERSION_CODE
