@@ -1696,11 +1696,7 @@ static u32 cake_classify(struct Qdisc *sch, struct cake_tin_data **t,
 		goto hash;
 
 	*qerr = NET_XMIT_SUCCESS | __NET_XMIT_BYPASS;
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 13, 0)
-	result = tc_classify(skb, filter, &res, false);
-#else
 	result = tcf_classify(skb, filter, &res, false);
-#endif
 
 	if (result >= 0) {
 #ifdef CONFIG_NET_CLS_ACT
