@@ -1799,14 +1799,6 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 			cobalt_set_enqueue_time(segs, now);
 			get_cobalt_cb(segs)->adjusted_len = cake_overhead(q,
 									  segs);
-
-			/* For encapsulated packets, the mac_len may not be set
-			 * correctly after GSO split. Fix this by resetting it;
-			 * if skb_gso_segment() already does this correctly,
-			 * this is will just recalculate the current value.
-			 */
-			skb_reset_mac_len(skb);
-
 			flow_queue_add(flow, segs);
 
 			sch->q.qlen++;
