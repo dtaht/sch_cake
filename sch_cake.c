@@ -1462,53 +1462,53 @@ static u32 cake_heap_get_backlog(const struct cake_sched_data *q, u16 i)
 	return q->tins[ii.t].backlogs[ii.b];
 }
 
-static void cake_heapify(struct cake_sched_data *q, u16 i)
+static void cake_heapify(struct cake_sched_data *q, u16 insert)
 {
-	static const u32 a = CAKE_MAX_TINS * CAKE_QUEUES;
-	u32 mb = cake_heap_get_backlog(q, i);
-	u32 m = i;
+	static const u32 all = CAKE_MAX_TINS * CAKE_QUEUES;
+	u32 mybacklog = cake_heap_get_backlog(q, i);
+	u32 my = insert;
 
-	while (m < a) {
-		u32 l = m + m + 1;
-		u32 r = l + 1;
+	while (my < all) {
+		u32 left = my + my + 1;
+		u32 right = left + 1;
 
-		if (l < a) {
-			u32 lb = cake_heap_get_backlog(q, l);
+		if (left < all) {
+			u32 leftbacklog = cake_heap_get_backlog(q, left);
 
-			if (lb > mb) {
-				m  = l;
-				mb = lb;
+			if (leftbacklog > mybacklog) {
+				my  = left;
+				mybacklog = leftbacklog;
 			}
 		}
 
-		if (r < a) {
-			u32 rb = cake_heap_get_backlog(q, r);
+		if (right < all) {
+			u32 rightbacklog = cake_heap_get_backlog(q, right);
 
-			if (rb > mb) {
-				m  = r;
-				mb = rb;
+			if (rightbacklog > mybacklog) {
+				my  = right;
+				mybacklog = rightbacklog;
 			}
 		}
 
-		if (m != i) {
-			cake_heap_swap(q, i, m);
-			i = m;
+		if (my != insert) {
+			cake_heap_swap(q, insert, my);
+			insert = my;
 		} else {
 			break;
 		}
 	}
 }
 
-static void cake_heapify_up(struct cake_sched_data *q, u16 i)
+static void cake_heapify_up(struct cake_sched_data *q, u16 insert)
 {
-	while (i > 0 && i < CAKE_MAX_TINS * CAKE_QUEUES) {
-		u16 p = (i - 1) >> 1;
-		u32 ib = cake_heap_get_backlog(q, i);
-		u32 pb = cake_heap_get_backlog(q, p);
+	while (insert > 0 && insert < CAKE_MAX_TINS * CAKE_QUEUES) {
+		u16 parent = (insert - 1) >> 1;
+		u32 insertbacklog = cake_heap_get_backlog(q, insert);
+		u32 parentbacklog = cake_heap_get_backlog(q, parent);
 
-		if (ib > pb) {
-			cake_heap_swap(q, i, p);
-			i = p;
+		if (insertbacklog > parentbacklog) {
+			cake_heap_swap(q, insert, parent);
+			insert = parent;
 		} else {
 			break;
 		}
