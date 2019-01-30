@@ -3079,13 +3079,13 @@ static int cake_dump_class_stats(struct Qdisc *sch, unsigned long cl,
 		flow = &b->flows[idx % CAKE_QUEUES];
 
 		if (flow->head) {
-			sch_tree_lock(sch);
+			cake_maybe_lock(sch);
 			skb = flow->head;
 			while (skb) {
 				qs.qlen++;
 				skb = skb->next;
 			}
-			sch_tree_unlock(sch);
+			cake_maybe_unlock(sch);
 		}
 		qs.backlog = b->backlogs[idx % CAKE_QUEUES];
 		qs.drops = flow->dropped;

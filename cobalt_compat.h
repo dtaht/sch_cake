@@ -98,6 +98,15 @@ static inline unsigned int __tcp_hdrlen(const struct tcphdr *th)
 #define nla_put_u64_64bit(skb, attrtype, value, padattr) nla_put_u64(skb, attrtype, value)
 #endif
 
+#if KERNEL_VERSION(4, 8, 0) > LINUX_VERSION_CODE
+#define cake_maybe_lock(sch)
+#define cake_maybe_unlock(sch)
+#else
+#define cake_maybe_lock(sch) sch_tree_lock(sch);
+#define cake_maybe_unlock(sch) sch_tree_unlock(sch);
+#endif
+
+
 #if KERNEL_VERSION(4, 12, 0) > LINUX_VERSION_CODE
 static void *kvzalloc(size_t sz, gfp_t flags)
 {
