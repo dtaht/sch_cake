@@ -1632,7 +1632,7 @@ static void cake_wash_diffserv(struct sk_buff *skb)
 	}
 }
 
-static u8 cake_handle_diffserv(struct sk_buff *skb, u16 wash)
+static u8 cake_handle_diffserv(struct sk_buff *skb, bool wash)
 {
 	u8 dscp;
 
@@ -1662,34 +1662,41 @@ static struct cake_tin_data *cake_select_tin(struct Qdisc *sch,
 					     struct sk_buff *skb)
 {
 	struct cake_sched_data *q = qdisc_priv(sch);
+	bool wash;
 	u32 tin;
 
-	if (TC_H_MAJ(skb->priority) == sch->handle &&
-	    TC_H_MIN(skb->priority) > 0 &&
-	    TC_H_MIN(skb->priority) <= q->tin_cnt) {
-		tin = q->tin_order[TC_H_MIN(skb->priority) - 1];
+	wash = !!(q->rate_flags & CAKE_FLAG_WASH);
 
-		if (q->rate_flags & CAKE_FLAG_WASH)
-			cake_wash_diffserv(skb);
-	} else if (q->tin_mode != CAKE_DIFFSERV_BESTEFFORT) {
-		if (q->rate_flags & CAKE_FLAG_FWMARK && /* use fw mark */
-		    skb->mark &&
-		    skb->mark <= q->tin_cnt) {
-			tin = q->tin_order[skb->mark - 1];
-			if (q->rate_flags & CAKE_FLAG_WASH)
-				cake_wash_diffserv(skb);
-		} else {
-			/* extract the Diffserv Precedence field, if it exists */
-			/* and clear DSCP bits if washing */
-			tin = q->tin_index[cake_handle_diffserv(skb,
-					q->rate_flags & CAKE_FLAG_WASH)];
-			if (unlikely(tin >= q->tin_cnt))
-				tin = 0;
-		}
-	} else {
+	if (q->tin_mode == CAKE_DIFFSERV_BESTEFFORT) {
+
 		tin = 0;
-		if (q->rate_flags & CAKE_FLAG_WASH)
+		if (wash)
 			cake_wash_diffserv(skb);
+
+	} else if (TC_H_MAJ(skb->priority) == sch->handle && /* use priority */
+		   TC_H_MIN(skb->priority) > 0 &&
+		   TC_H_MIN(skb->priority) <= q->tin_cnt) {
+
+		tin = q->tin_order[TC_H_MIN(skb->priority) - 1];
+		if (wash)
+			cake_wash_diffserv(skb);
+
+	} else if (q->rate_flags & CAKE_FLAG_FWMARK && /* use fw mark */
+		   skb->mark &&
+		   skb->mark <= q->tin_cnt) {
+
+		tin = q->tin_order[skb->mark - 1];
+
+		if (wash)
+			cake_wash_diffserv(skb);
+
+	} else { /* fallback to DSCP */
+		/* extract the Diffserv Precedence field, if it exists */
+		/* and clear DSCP bits if washing */
+		tin = q->tin_index[cake_handle_diffserv(skb, wash)];
+
+		if (unlikely(tin >= q->tin_cnt))
+			tin = 0;
 	}
 
 	return &q->tins[tin];
