@@ -1622,10 +1622,12 @@ static void cake_wash_diffserv(struct sk_buff *skb)
 {
 	switch (skb->protocol) {
 	case htons(ETH_P_IP):
-		ipv4_change_dsfield(ip_hdr(skb), INET_ECN_MASK, 0);
+		if (ipv4_get_dsfield(ip_hdr(skb)) & ~INET_ECN_MASK)
+			ipv4_change_dsfield(ip_hdr(skb), INET_ECN_MASK, 0);
 		break;
 	case htons(ETH_P_IPV6):
-		ipv6_change_dsfield(ipv6_hdr(skb), INET_ECN_MASK, 0);
+		if (ipv6_get_dsfield(ipv6_hdr(skb)) & ~INET_ECN_MASK)
+			ipv6_change_dsfield(ipv6_hdr(skb), INET_ECN_MASK, 0);
 		break;
 	default:
 		break;
