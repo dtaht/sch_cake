@@ -222,6 +222,9 @@ struct cake_sched_data {
 	u8		ack_filter;
 	u8		atm_mode;
 
+	u32		fwmark_mask;
+	u16		fwmark_shft;
+
 	/* time_next = time_this + ((len * rate_ns) >> rate_shft) */
 	u16		rate_shft;
 	ktime_t		time_next_packet;
@@ -269,8 +272,7 @@ enum {
 	CAKE_FLAG_AUTORATE_INGRESS = BIT(1),
 	CAKE_FLAG_INGRESS	   = BIT(2),
 	CAKE_FLAG_WASH		   = BIT(3),
-	CAKE_FLAG_SPLIT_GSO	   = BIT(4),
-	CAKE_FLAG_FWMARK	   = BIT(5)
+	CAKE_FLAG_SPLIT_GSO	   = BIT(4)
 };
 
 /* COBALT operates the Codel and BLUE algorithms in parallel, in order to
@@ -1648,7 +1650,7 @@ static struct cake_tin_data *cake_select_tin(struct Qdisc *sch,
 					     struct sk_buff *skb)
 {
 	struct cake_sched_data *q = qdisc_priv(sch);
-	u32 tin;
+	u32 tin, mark;
 	u8 dscp;
 
 	/* Tin selection: Default to diffserv-based selection, allow overriding
@@ -1656,14 +1658,13 @@ static struct cake_tin_data *cake_select_tin(struct Qdisc *sch,
 	 */
 	dscp = cake_handle_diffserv(skb,
 				    q->rate_flags & CAKE_FLAG_WASH);
+	mark = (skb->mark & q->fwmark_mask) >> q->fwmark_shft;
 
 	if (q->tin_mode == CAKE_DIFFSERV_BESTEFFORT)
 		tin = 0;
 
-	else if (q->rate_flags & CAKE_FLAG_FWMARK && /* use fw mark */
-		 skb->mark &&
-		 skb->mark <= q->tin_cnt)
-		tin = q->tin_order[skb->mark - 1];
+	else if (mark && mark <= q->tin_cnt)
+		tin = q->tin_order[mark - 1];
 
 	else if (TC_H_MAJ(skb->priority) == sch->handle &&
 		 TC_H_MIN(skb->priority) > 0 &&
@@ -2757,10 +2758,8 @@ static int cake_change(struct Qdisc *sch, struct nlattr *opt,
 	}
 
 	if (tb[TCA_CAKE_FWMARK]) {
-		if (!!nla_get_u32(tb[TCA_CAKE_FWMARK]))
-			q->rate_flags |= CAKE_FLAG_FWMARK;
-		else
-			q->rate_flags &= ~CAKE_FLAG_FWMARK;
+		q->fwmark_mask = nla_get_u32(tb[TCA_CAKE_FWMARK]);
+		q->fwmark_shft = ffs(q->fwmark_mask);
 	}
 
 	if (q->tins) {
@@ -2943,8 +2942,7 @@ static int cake_dump(struct Qdisc *sch, struct sk_buff *skb)
 			!!(q->rate_flags & CAKE_FLAG_SPLIT_GSO)))
 		goto nla_put_failure;
 
-	if (nla_put_u32(skb, TCA_CAKE_FWMARK,
-			!!(q->rate_flags & CAKE_FLAG_FWMARK)))
+	if (nla_put_u32(skb, TCA_CAKE_FWMARK, q->fwmark_mask))
 		goto nla_put_failure;
 
 	return nla_nest_end(skb, opts);
