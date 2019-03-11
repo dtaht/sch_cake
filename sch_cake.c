@@ -78,6 +78,7 @@
 
 #if IS_REACHABLE(CONFIG_NF_CONNTRACK)
 #include <net/netfilter/nf_conntrack_core.h>
+#include <net/netfilter/nf_conntrack_ecache.h>
 #include <net/netfilter/nf_conntrack_zones.h>
 #include <net/netfilter/nf_conntrack.h>
 #endif
@@ -272,7 +273,8 @@ enum {
 	CAKE_FLAG_AUTORATE_INGRESS = BIT(1),
 	CAKE_FLAG_INGRESS	   = BIT(2),
 	CAKE_FLAG_WASH		   = BIT(3),
-	CAKE_FLAG_SPLIT_GSO	   = BIT(4)
+	CAKE_FLAG_SPLIT_GSO	   = BIT(4),
+	CAKE_FLAG_STORE_MARK	   = BIT(5)
 };
 
 /* COBALT operates the Codel and BLUE algorithms in parallel, in order to
@@ -1646,6 +1648,27 @@ static u8 cake_handle_diffserv(struct sk_buff *skb, u16 wash)
 	}
 }
 
+static void cake_set_tin_connmark(struct cake_sched_data *q,
+				  struct sk_buff *skb, u32 tin)
+{
+#if IS_REACHABLE(CONFIG_NF_CONNTRACK)
+	enum ip_conntrack_info ctinfo;
+	struct nf_conn *ct;
+	u32 newmark;
+
+	ct = nf_ct_get(skb, &ctinfo);
+	if (ct) {
+		newmark = (ct->mark & ~q->fwmark_mask);
+		newmark ^= (tin << q->fwmark_shft) & q->fwmark_mask;
+
+		if (ct->mark != newmark) {
+			ct->mark = newmark;
+			nf_conntrack_event_cache(IPCT_MARK, ct);
+		}
+	}
+#endif
+}
+
 static struct cake_tin_data *cake_select_tin(struct Qdisc *sch,
 					     struct sk_buff *skb)
 {
@@ -1677,6 +1700,9 @@ static struct cake_tin_data *cake_select_tin(struct Qdisc *sch,
 		if (unlikely(tin >= q->tin_cnt))
 			tin = 0;
 	}
+
+	if (q->rate_flags & CAKE_FLAG_STORE_MARK)
+		cake_set_tin_connmark(q, skb, tin);
 
 	return &q->tins[tin];
 }
@@ -2300,6 +2326,7 @@ static const struct nla_policy cake_policy[TCA_CAKE_MAX + 1] = {
 	[TCA_CAKE_INGRESS]	 = { .type = NLA_U32 },
 	[TCA_CAKE_ACK_FILTER]	 = { .type = NLA_U32 },
 	[TCA_CAKE_FWMARK]	 = { .type = NLA_U32 },
+	[TCA_CAKE_FWMARK_STORE]  = { .type = NLA_U32 },
 };
 
 static void cake_set_rate(struct cake_tin_data *b, u64 rate, u32 mtu,
@@ -2763,6 +2790,28 @@ static int cake_change(struct Qdisc *sch, struct nlattr *opt,
 		q->fwmark_shft = q->fwmark_mask ? (__ffs(q->fwmark_mask) - 1) : 0;
 	}
 
+	if (tb[TCA_CAKE_FWMARK_STORE]) {
+#if IS_REACHABLE(CONFIG_NF_CONNTRACK)
+		if (!!nla_get_u32(tb[TCA_CAKE_FWMARK_STORE])) {
+			if (!q->fwmark_mask) {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 16, 0)
+				NL_SET_ERR_MSG_ATTR(extack, tb[TCA_CAKE_FWMARK_STORE],
+						    "Can't store mark without a fwmark mask set");
+#endif
+				return -EINVAL;
+			}
+			q->rate_flags |= CAKE_FLAG_STORE_MARK;
+		} else
+			q->rate_flags &= ~CAKE_FLAG_STORE_MARK;
+#else
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 16, 0)
+		NL_SET_ERR_MSG_ATTR(extack, tb[TCA_CAKE_FWMARK_STORE],
+				    "No conntrack support in kernel");
+#endif
+		return -EOPNOTSUPP;
+#endif
+	}
+
 	if (q->tins) {
 		sch_tree_lock(sch);
 		cake_reconfigure(sch);
@@ -2944,6 +2993,10 @@ static int cake_dump(struct Qdisc *sch, struct sk_buff *skb)
 		goto nla_put_failure;
 
 	if (nla_put_u32(skb, TCA_CAKE_FWMARK, q->fwmark_mask))
+		goto nla_put_failure;
+
+	if (nla_put_u32(skb, TCA_CAKE_FWMARK_STORE,
+			!!(q->rate_flags & CAKE_FLAG_STORE_MARK)))
 		goto nla_put_failure;
 
 	return nla_nest_end(skb, opts);
