@@ -2299,6 +2299,7 @@ static const struct nla_policy cake_policy[TCA_CAKE_MAX + 1] = {
 	[TCA_CAKE_MPU]		 = { .type = NLA_U32 },
 	[TCA_CAKE_INGRESS]	 = { .type = NLA_U32 },
 	[TCA_CAKE_ACK_FILTER]	 = { .type = NLA_U32 },
+	[TCA_CAKE_FWMARK]	 = { .type = NLA_U32 },
 };
 
 static void cake_set_rate(struct cake_tin_data *b, u64 rate, u32 mtu,
@@ -2759,7 +2760,7 @@ static int cake_change(struct Qdisc *sch, struct nlattr *opt,
 
 	if (tb[TCA_CAKE_FWMARK]) {
 		q->fwmark_mask = nla_get_u32(tb[TCA_CAKE_FWMARK]);
-		q->fwmark_shft = ffs(q->fwmark_mask);
+		q->fwmark_shft = q->fwmark_mask ? (__ffs(q->fwmark_mask) - 1) : 0;
 	}
 
 	if (q->tins) {
