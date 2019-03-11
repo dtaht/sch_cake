@@ -2787,7 +2787,7 @@ static int cake_change(struct Qdisc *sch, struct nlattr *opt,
 
 	if (tb[TCA_CAKE_FWMARK]) {
 		q->fwmark_mask = nla_get_u32(tb[TCA_CAKE_FWMARK]);
-		q->fwmark_shft = q->fwmark_mask ? (__ffs(q->fwmark_mask) - 1) : 0;
+		q->fwmark_shft = q->fwmark_mask ? __ffs(q->fwmark_mask) : 0;
 	}
 
 	if (tb[TCA_CAKE_FWMARK_STORE]) {
