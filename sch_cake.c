@@ -102,6 +102,7 @@ struct cobalt_params {
 	u64	mtu_time;
 	u32	p_inc;
 	u32	p_dec;
+	u32	inv_target;
 };
 
 /* struct cobalt_vars - contains codel and blue variables
@@ -589,6 +590,12 @@ static bool cobalt_should_drop(struct cobalt_vars *vars,
 	/* Simple BLUE implementation.  Lack of ECN is deliberate. */
 	if (vars->p_drop)
 		drop |= (prandom_u32() < vars->p_drop);
+
+	/* Simple SCE probability ramp from zero to target delay. */
+	if (p->inv_target) {
+		if(over_target || prandom_u32() < reciprocal_scale(sojourn, p->inv_target))
+			INET_ECN_set_sce(skb);
+	}
 
 	/* Overload the drop_next field as an activity timeout */
 	if (!vars->count)
@@ -2367,6 +2374,11 @@ static void cake_set_rate(struct cake_tin_data *b, u64 rate, u32 mtu,
 	b->cparams.mtu_time = byte_target_ns;
 	b->cparams.p_inc = 1 << 24; /* 1/256 */
 	b->cparams.p_dec = 1 << 20; /* 1/4096 */
+
+	if(q->rate_flags & CAKE_FLAGS_SCE)
+		b->cparams.inv_target = max(div64_u64(0x100000000ULL, b->cparams.target), 1);
+	else
+		b->cparams.inv_target = 0;
 }
 
 static int cake_config_besteffort(struct Qdisc *sch)
