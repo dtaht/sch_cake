@@ -274,7 +274,8 @@ enum {
 	CAKE_FLAG_INGRESS	   = BIT(2),
 	CAKE_FLAG_WASH		   = BIT(3),
 	CAKE_FLAG_SPLIT_GSO	   = BIT(4),
-	CAKE_FLAG_STORE_MARK	   = BIT(5)
+	CAKE_FLAG_STORE_MARK	   = BIT(5),
+	CAKE_FLAG_SCE		   = BIT(6)
 };
 
 /* COBALT operates the Codel and BLUE algorithms in parallel, in order to
@@ -2812,6 +2813,13 @@ static int cake_change(struct Qdisc *sch, struct nlattr *opt,
 #endif
 	}
 
+	if (tb[TCA_CAKE_SCE]) {
+		if (!!nla_get_u32(tb[TCA_CAKE_SCE]))
+			q->rate_flags |= CAKE_FLAG_SCE;
+		else
+			q->rate_flags &= ~CAKE_FLAG_SCE;
+	}
+
 	if (q->tins) {
 		sch_tree_lock(sch);
 		cake_reconfigure(sch);
@@ -2997,6 +3005,10 @@ static int cake_dump(struct Qdisc *sch, struct sk_buff *skb)
 
 	if (nla_put_u32(skb, TCA_CAKE_FWMARK_STORE,
 			!!(q->rate_flags & CAKE_FLAG_STORE_MARK)))
+		goto nla_put_failure;
+
+	if (nla_put_u32(skb, TCA_CAKE_SCE,
+			!!(q->rate_flags & CAKE_FLAG_SCE)))
 		goto nla_put_failure;
 
 	return nla_nest_end(skb, opts);
