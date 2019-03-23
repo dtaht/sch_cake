@@ -95,6 +95,7 @@
  * @mtu_time:   serialisation delay of maximum-size packet
  * @p_inc:      increment of blue drop probability (0.32 fxp)
  * @p_dec:      decrement of blue drop probability (0.32 fxp)
+ * @inv_target: probability per delay nanosecond for SCE marking
  */
 struct cobalt_params {
 	u64	interval;
@@ -112,7 +113,8 @@ struct cobalt_params {
  * @blue_timer:		Blue time to next drop
  * @p_drop:		BLUE drop probability (0.32 fxp)
  * @dropping:		set if in dropping state
- * @ecn_marked:		set if marked
+ * @ecn_marked:		set if marked CE
+ * @sce_marked:		set is marked SCE
  */
 struct cobalt_vars {
 	u32	count;
@@ -122,6 +124,7 @@ struct cobalt_vars {
 	u32     p_drop;
 	bool	dropping;
 	bool    ecn_marked;
+	bool	sce_marked;
 };
 
 enum {
@@ -190,6 +193,7 @@ struct cake_tin_data {
 	u32	tin_backlog;
 	u32	tin_dropped;
 	u32	tin_ecn_mark;
+	u32	tin_sce_mark;
 
 	u32	packets;
 	u64	bytes;
@@ -594,7 +598,7 @@ static bool cobalt_should_drop(struct cobalt_vars *vars,
 	/* Simple SCE probability ramp from zero to target delay. */
 	if (p->inv_target) {
 		if(over_target || prandom_u32() < reciprocal_scale(sojourn, p->inv_target))
-			INET_ECN_set_sce(skb);
+			vars->sce_marked = INET_ECN_set_sce(skb);
 	}
 
 	/* Overload the drop_next field as an activity timeout */
@@ -2268,6 +2272,7 @@ retry:
 	}
 
 	b->tin_ecn_mark += !!flow->cvars.ecn_marked;
+	b->tin_sce_mark += !!flow->cvars.sce_marked;
 	qdisc_bstats_update(sch, skb);
 
 	/* collect delay stats */
