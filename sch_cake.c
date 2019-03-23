@@ -75,6 +75,7 @@
 #include <net/flow_dissector.h>
 #endif
 #include "cobalt_compat.h"
+#include "sce.h"
 
 #if IS_REACHABLE(CONFIG_NF_CONNTRACK)
 #include <net/netfilter/nf_conntrack_core.h>
@@ -2340,9 +2341,11 @@ static const struct nla_policy cake_policy[TCA_CAKE_MAX + 1] = {
 	[TCA_CAKE_ACK_FILTER]	 = { .type = NLA_U32 },
 	[TCA_CAKE_FWMARK]	 = { .type = NLA_U32 },
 	[TCA_CAKE_FWMARK_STORE]  = { .type = NLA_U32 },
+	[TCA_CAKE_SCE]		 = { .type = NLA_U32 },
 };
 
-static void cake_set_rate(struct cake_tin_data *b, u64 rate, u32 mtu,
+static void cake_set_rate(struct cake_sched_data *q,
+			  struct cake_tin_data *b, u64 rate, u32 mtu,
 			  u64 target_ns, u64 rtt_est_ns)
 {
 	/* convert byte-rate into time-per-byte
@@ -2380,8 +2383,8 @@ static void cake_set_rate(struct cake_tin_data *b, u64 rate, u32 mtu,
 	b->cparams.p_inc = 1 << 24; /* 1/256 */
 	b->cparams.p_dec = 1 << 20; /* 1/4096 */
 
-	if(q->rate_flags & CAKE_FLAGS_SCE)
-		b->cparams.inv_target = max(div64_u64(0x100000000ULL, b->cparams.target), 1);
+	if(q->rate_flags & CAKE_FLAG_SCE)
+		b->cparams.inv_target = max(div64_u64(0x100000000ULL, b->cparams.target), 1ULL);
 	else
 		b->cparams.inv_target = 0;
 }
@@ -2398,7 +2401,7 @@ static int cake_config_besteffort(struct Qdisc *sch)
 	q->tin_index = besteffort;
 	q->tin_order = normal_order;
 
-	cake_set_rate(b, rate, mtu,
+	cake_set_rate(q, b, rate, mtu,
 		      us_to_ns(q->target), us_to_ns(q->interval));
 	b->tin_quantum_band = 65535;
 	b->tin_quantum_prio = 65535;
@@ -2423,7 +2426,7 @@ static int cake_config_precedence(struct Qdisc *sch)
 	for (i = 0; i < q->tin_cnt; i++) {
 		struct cake_tin_data *b = &q->tins[i];
 
-		cake_set_rate(b, rate, mtu, us_to_ns(q->target),
+		cake_set_rate(q, b, rate, mtu, us_to_ns(q->target),
 			      us_to_ns(q->interval));
 
 		b->tin_quantum_prio = max_t(u16, 1U, quantum1);
@@ -2520,7 +2523,7 @@ static int cake_config_diffserv8(struct Qdisc *sch)
 	for (i = 0; i < q->tin_cnt; i++) {
 		struct cake_tin_data *b = &q->tins[i];
 
-		cake_set_rate(b, rate, mtu, us_to_ns(q->target),
+		cake_set_rate(q, b, rate, mtu, us_to_ns(q->target),
 			      us_to_ns(q->interval));
 
 		b->tin_quantum_prio = max_t(u16, 1U, quantum1);
@@ -2564,13 +2567,13 @@ static int cake_config_diffserv4(struct Qdisc *sch)
 	q->tin_order = bulk_order;
 
 	/* class characteristics */
-	cake_set_rate(&q->tins[0], rate, mtu,
+	cake_set_rate(q, &q->tins[0], rate, mtu,
 		      us_to_ns(q->target), us_to_ns(q->interval));
-	cake_set_rate(&q->tins[1], rate >> 4, mtu,
+	cake_set_rate(q, &q->tins[1], rate >> 4, mtu,
 		      us_to_ns(q->target), us_to_ns(q->interval));
-	cake_set_rate(&q->tins[2], rate >> 1, mtu,
+	cake_set_rate(q, &q->tins[2], rate >> 1, mtu,
 		      us_to_ns(q->target), us_to_ns(q->interval));
-	cake_set_rate(&q->tins[3], rate >> 2, mtu,
+	cake_set_rate(q, &q->tins[3], rate >> 2, mtu,
 		      us_to_ns(q->target), us_to_ns(q->interval));
 
 	/* priority weights */
@@ -2607,11 +2610,11 @@ static int cake_config_diffserv3(struct Qdisc *sch)
 	q->tin_order = bulk_order;
 
 	/* class characteristics */
-	cake_set_rate(&q->tins[0], rate, mtu,
+	cake_set_rate(q, &q->tins[0], rate, mtu,
 		      us_to_ns(q->target), us_to_ns(q->interval));
-	cake_set_rate(&q->tins[1], rate >> 4, mtu,
+	cake_set_rate(q, &q->tins[1], rate >> 4, mtu,
 		      us_to_ns(q->target), us_to_ns(q->interval));
-	cake_set_rate(&q->tins[2], rate >> 2, mtu,
+	cake_set_rate(q, &q->tins[2], rate >> 2, mtu,
 		      us_to_ns(q->target), us_to_ns(q->interval));
 
 	/* priority weights */
