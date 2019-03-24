@@ -3119,6 +3119,8 @@ static int cake_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 		PUT_TSTAT_U32(MAX_SKBLEN, b->max_skblen);
 
 		PUT_TSTAT_U32(FLOW_QUANTUM, b->flow_quantum);
+
+		PUT_TSTAT_U32(SCE_MARKED_PACKETS, b->tin_sce_mark);
 		nla_nest_end(d->skb, ts);
 	}
 
