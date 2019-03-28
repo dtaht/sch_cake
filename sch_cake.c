@@ -525,7 +525,8 @@ static bool cobalt_should_drop(struct cobalt_vars *vars,
 			       struct cobalt_params *p,
 			       ktime_t now,
 			       struct sk_buff *skb,
-			       u32 bulk_flows)
+			       u32 bulk_flows,
+			       bool is_bulk)
 {
 	bool next_due, over_target, drop = false;
 	ktime_t schedule;
@@ -597,7 +598,7 @@ static bool cobalt_should_drop(struct cobalt_vars *vars,
 		drop |= (prandom_u32() < vars->p_drop);
 
 	/* Simple SCE probability ramp from zero to target delay. */
-	if (p->inv_target) {
+	if (is_bulk && p->inv_target) {
 		if(over_target || prandom_u32() < reciprocal_scale(sojourn, p->inv_target))
 			vars->sce_marked = INET_ECN_set_sce(skb);
 	}
@@ -2248,7 +2249,8 @@ retry:
 		if (!cobalt_should_drop(&flow->cvars, &b->cparams, now, skb,
 					(b->bulk_flow_count *
 					 !!(q->rate_flags &
-					    CAKE_FLAG_INGRESS))) ||
+					    CAKE_FLAG_INGRESS)),
+					flow->set == CAKE_SET_BULK) ||
 		    !flow->head)
 			break;
 
