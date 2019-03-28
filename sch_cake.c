@@ -598,8 +598,8 @@ static bool cobalt_should_drop(struct cobalt_vars *vars,
 		drop |= (prandom_u32() < vars->p_drop);
 
 	/* Simple SCE probability ramp from zero to target delay. */
-	if (is_bulk && p->inv_target) {
-		if(over_target || prandom_u32() < sojourn * p->inv_target)
+	if (is_bulk && sojourn > (p->target/2) && p->inv_target) {
+		if(over_target || prandom_u32() < (sojourn - p->target/2) * 2 * p->inv_target)
 			vars->sce_marked = INET_ECN_set_sce(skb);
 	}
 
