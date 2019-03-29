@@ -601,6 +601,8 @@ static bool cobalt_should_drop(struct cobalt_vars *vars,
 	if (is_bulk && sojourn > (p->target/2) && p->inv_target) {
 		if(over_target || prandom_u32() < (sojourn - p->target/2) * (p->inv_target/2))
 			vars->sce_marked = INET_ECN_set_sce(skb);
+		else
+			vars->sce_marked = 0;
 	} else {
 		vars->sce_marked = 0;
 	}
