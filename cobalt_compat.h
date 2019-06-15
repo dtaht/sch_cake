@@ -94,6 +94,15 @@ static inline unsigned int __tcp_hdrlen(const struct tcphdr *th)
 }
 #endif
 
+#if KERNEL_VERSION(4, 6, 0) > LINUX_VERSION_CODE
+static inline int skb_try_make_writable(struct sk_buff *skb,
+					unsigned int write_len)
+{
+	return skb_cloned(skb) && !skb_clone_writable(skb, write_len) &&
+	       pskb_expand_head(skb, 0, 0, GFP_ATOMIC);
+}
+#endif
+
 #if KERNEL_VERSION(4, 7, 0) > LINUX_VERSION_CODE
 #define nla_put_u64_64bit(skb, attrtype, value, padattr) nla_put_u64(skb, attrtype, value)
 #endif
