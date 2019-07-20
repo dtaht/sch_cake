@@ -3152,6 +3152,9 @@ static int cake_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 
 nla_put_failure:
 	nla_nest_cancel(d->skb, stats);
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 8, 0)
+	sch_tree_unlock(sch);
+#endif
 	return -1;
 }
 
