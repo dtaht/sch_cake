@@ -75,11 +75,9 @@
 #include <net/flow_dissector.h>
 #endif
 #include "cobalt_compat.h"
-#include "sce.h"
 
 #if IS_REACHABLE(CONFIG_NF_CONNTRACK)
 #include <net/netfilter/nf_conntrack_core.h>
-#include <net/netfilter/nf_conntrack_ecache.h>
 #include <net/netfilter/nf_conntrack_zones.h>
 #include <net/netfilter/nf_conntrack.h>
 #endif
@@ -96,7 +94,6 @@
  * @mtu_time:   serialisation delay of maximum-size packet
  * @p_inc:      increment of blue drop probability (0.32 fxp)
  * @p_dec:      decrement of blue drop probability (0.32 fxp)
- * @inv_target: probability per delay nanosecond for SCE marking
  */
 struct cobalt_params {
 	u64	interval;
@@ -104,7 +101,6 @@ struct cobalt_params {
 	u64	mtu_time;
 	u32	p_inc;
 	u32	p_dec;
-	u32	inv_target;
 };
 
 /* struct cobalt_vars - contains codel and blue variables
@@ -114,8 +110,7 @@ struct cobalt_params {
  * @blue_timer:		Blue time to next drop
  * @p_drop:		BLUE drop probability (0.32 fxp)
  * @dropping:		set if in dropping state
- * @ecn_marked:		set if marked CE
- * @sce_marked:		set is marked SCE
+ * @ecn_marked:		set if marked
  */
 struct cobalt_vars {
 	u32	count;
@@ -125,7 +120,6 @@ struct cobalt_vars {
 	u32     p_drop;
 	bool	dropping;
 	bool    ecn_marked;
-	bool	sce_marked;
 };
 
 enum {
@@ -193,7 +187,6 @@ struct cake_tin_data {
 	u32	tin_backlog;
 	u32	tin_dropped;
 	u32	tin_ecn_mark;
-	u32	tin_sce_mark;
 
 	u32	packets;
 	u64	bytes;
@@ -278,9 +271,7 @@ enum {
 	CAKE_FLAG_AUTORATE_INGRESS = BIT(1),
 	CAKE_FLAG_INGRESS	   = BIT(2),
 	CAKE_FLAG_WASH		   = BIT(3),
-	CAKE_FLAG_SPLIT_GSO	   = BIT(4),
-	CAKE_FLAG_STORE_MARK	   = BIT(5),
-	CAKE_FLAG_SCE		   = BIT(6)
+	CAKE_FLAG_SPLIT_GSO	   = BIT(4)
 };
 
 /* COBALT operates the Codel and BLUE algorithms in parallel, in order to
@@ -524,8 +515,7 @@ static bool cobalt_should_drop(struct cobalt_vars *vars,
 			       struct cobalt_params *p,
 			       ktime_t now,
 			       struct sk_buff *skb,
-			       u32 bulk_flows,
-			       bool is_bulk)
+			       u32 bulk_flows)
 {
 	bool next_due, over_target, drop = false;
 	ktime_t schedule;
@@ -595,16 +585,6 @@ static bool cobalt_should_drop(struct cobalt_vars *vars,
 	/* Simple BLUE implementation.  Lack of ECN is deliberate. */
 	if (vars->p_drop)
 		drop |= (prandom_u32() < vars->p_drop);
-
-	/* Simple SCE probability ramp from zero to target delay. */
-	if (is_bulk && sojourn > (p->target/2) && p->inv_target) {
-		if(over_target || prandom_u32() < (sojourn - p->target/2) * (p->inv_target/2))
-			vars->sce_marked = INET_ECN_set_sce(skb);
-		else
-			vars->sce_marked = 0;
-	} else {
-		vars->sce_marked = 0;
-	}
 
 	/* Overload the drop_next field as an activity timeout */
 	if (!vars->count)
@@ -1676,27 +1656,6 @@ static u8 cake_handle_diffserv(struct sk_buff *skb, u16 wash)
 	}
 }
 
-static void cake_set_tin_connmark(struct cake_sched_data *q,
-				  struct sk_buff *skb, u32 tin)
-{
-#if IS_REACHABLE(CONFIG_NF_CONNTRACK)
-	enum ip_conntrack_info ctinfo;
-	struct nf_conn *ct;
-	u32 newmark;
-
-	ct = nf_ct_get(skb, &ctinfo);
-	if (ct) {
-		newmark = (ct->mark & ~q->fwmark_mask);
-		newmark ^= (tin << q->fwmark_shft) & q->fwmark_mask;
-
-		if (ct->mark != newmark) {
-			ct->mark = newmark;
-			nf_conntrack_event_cache(IPCT_MARK, ct);
-		}
-	}
-#endif
-}
-
 static struct cake_tin_data *cake_select_tin(struct Qdisc *sch,
 					     struct sk_buff *skb)
 {
@@ -1728,9 +1687,6 @@ static struct cake_tin_data *cake_select_tin(struct Qdisc *sch,
 		if (unlikely(tin >= q->tin_cnt))
 			tin = 0;
 	}
-
-	if (q->rate_flags & CAKE_FLAG_STORE_MARK)
-		cake_set_tin_connmark(q, skb, tin);
 
 	return &q->tins[tin];
 }
@@ -2263,8 +2219,7 @@ retry:
 		if (!cobalt_should_drop(&flow->cvars, &b->cparams, now, skb,
 					(b->bulk_flow_count *
 					 !!(q->rate_flags &
-					    CAKE_FLAG_INGRESS)),
-					flow->set == CAKE_SET_BULK) ||
+					    CAKE_FLAG_INGRESS))) ||
 		    !flow->head)
 			break;
 
@@ -2289,7 +2244,6 @@ retry:
 	}
 
 	b->tin_ecn_mark += !!flow->cvars.ecn_marked;
-	b->tin_sce_mark += !!flow->cvars.sce_marked;
 	qdisc_bstats_update(sch, skb);
 
 	/* collect delay stats */
@@ -2356,12 +2310,9 @@ static const struct nla_policy cake_policy[TCA_CAKE_MAX + 1] = {
 	[TCA_CAKE_INGRESS]	 = { .type = NLA_U32 },
 	[TCA_CAKE_ACK_FILTER]	 = { .type = NLA_U32 },
 	[TCA_CAKE_FWMARK]	 = { .type = NLA_U32 },
-	[TCA_CAKE_FWMARK_STORE]  = { .type = NLA_U32 },
-	[TCA_CAKE_SCE]		 = { .type = NLA_U32 },
 };
 
-static void cake_set_rate(struct cake_sched_data *q,
-			  struct cake_tin_data *b, u64 rate, u32 mtu,
+static void cake_set_rate(struct cake_tin_data *b, u64 rate, u32 mtu,
 			  u64 target_ns, u64 rtt_est_ns)
 {
 	/* convert byte-rate into time-per-byte
@@ -2398,11 +2349,6 @@ static void cake_set_rate(struct cake_sched_data *q,
 	b->cparams.mtu_time = byte_target_ns;
 	b->cparams.p_inc = 1 << 24; /* 1/256 */
 	b->cparams.p_dec = 1 << 20; /* 1/4096 */
-
-	if(q->rate_flags & CAKE_FLAG_SCE)
-		b->cparams.inv_target = max(div64_u64(0x100000000ULL, b->cparams.target), 1ULL);
-	else
-		b->cparams.inv_target = 0;
 }
 
 static int cake_config_besteffort(struct Qdisc *sch)
@@ -2417,7 +2363,7 @@ static int cake_config_besteffort(struct Qdisc *sch)
 	q->tin_index = besteffort;
 	q->tin_order = normal_order;
 
-	cake_set_rate(q, b, rate, mtu,
+	cake_set_rate(b, rate, mtu,
 		      us_to_ns(q->target), us_to_ns(q->interval));
 	b->tin_quantum = 65535;
 
@@ -2440,7 +2386,7 @@ static int cake_config_precedence(struct Qdisc *sch)
 	for (i = 0; i < q->tin_cnt; i++) {
 		struct cake_tin_data *b = &q->tins[i];
 
-		cake_set_rate(q, b, rate, mtu, us_to_ns(q->target),
+		cake_set_rate(b, rate, mtu, us_to_ns(q->target),
 			      us_to_ns(q->interval));
 
 		b->tin_quantum = max_t(u16, 1U, quantum);
@@ -2532,7 +2478,7 @@ static int cake_config_diffserv8(struct Qdisc *sch)
 	for (i = 0; i < q->tin_cnt; i++) {
 		struct cake_tin_data *b = &q->tins[i];
 
-		cake_set_rate(q, b, rate, mtu, us_to_ns(q->target),
+		cake_set_rate(b, rate, mtu, us_to_ns(q->target),
 			      us_to_ns(q->interval));
 
 		b->tin_quantum = max_t(u16, 1U, quantum);
@@ -2572,13 +2518,13 @@ static int cake_config_diffserv4(struct Qdisc *sch)
 	q->tin_order = bulk_order;
 
 	/* class characteristics */
-	cake_set_rate(q, &q->tins[0], rate, mtu,
+	cake_set_rate(&q->tins[0], rate, mtu,
 		      us_to_ns(q->target), us_to_ns(q->interval));
-	cake_set_rate(q, &q->tins[1], rate >> 4, mtu,
+	cake_set_rate(&q->tins[1], rate >> 4, mtu,
 		      us_to_ns(q->target), us_to_ns(q->interval));
-	cake_set_rate(q, &q->tins[2], rate >> 1, mtu,
+	cake_set_rate(&q->tins[2], rate >> 1, mtu,
 		      us_to_ns(q->target), us_to_ns(q->interval));
-	cake_set_rate(q, &q->tins[3], rate >> 2, mtu,
+	cake_set_rate(&q->tins[3], rate >> 2, mtu,
 		      us_to_ns(q->target), us_to_ns(q->interval));
 
 	/* bandwidth-sharing weights */
@@ -2609,11 +2555,11 @@ static int cake_config_diffserv3(struct Qdisc *sch)
 	q->tin_order = bulk_order;
 
 	/* class characteristics */
-	cake_set_rate(q, &q->tins[0], rate, mtu,
+	cake_set_rate(&q->tins[0], rate, mtu,
 		      us_to_ns(q->target), us_to_ns(q->interval));
-	cake_set_rate(q, &q->tins[1], rate >> 4, mtu,
+	cake_set_rate(&q->tins[1], rate >> 4, mtu,
 		      us_to_ns(q->target), us_to_ns(q->interval));
-	cake_set_rate(q, &q->tins[2], rate >> 2, mtu,
+	cake_set_rate(&q->tins[2], rate >> 2, mtu,
 		      us_to_ns(q->target), us_to_ns(q->interval));
 
 	/* bandwidth-sharing weights */
@@ -2805,35 +2751,6 @@ static int cake_change(struct Qdisc *sch, struct nlattr *opt,
 		q->fwmark_shft = q->fwmark_mask ? __ffs(q->fwmark_mask) : 0;
 	}
 
-	if (tb[TCA_CAKE_FWMARK_STORE]) {
-#if IS_REACHABLE(CONFIG_NF_CONNTRACK)
-		if (!!nla_get_u32(tb[TCA_CAKE_FWMARK_STORE])) {
-			if (!q->fwmark_mask) {
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 16, 0)
-				NL_SET_ERR_MSG_ATTR(extack, tb[TCA_CAKE_FWMARK_STORE],
-						    "Can't store mark without a fwmark mask set");
-#endif
-				return -EINVAL;
-			}
-			q->rate_flags |= CAKE_FLAG_STORE_MARK;
-		} else
-			q->rate_flags &= ~CAKE_FLAG_STORE_MARK;
-#else
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 16, 0)
-		NL_SET_ERR_MSG_ATTR(extack, tb[TCA_CAKE_FWMARK_STORE],
-				    "No conntrack support in kernel");
-#endif
-		return -EOPNOTSUPP;
-#endif
-	}
-
-	if (tb[TCA_CAKE_SCE]) {
-		if (!!nla_get_u32(tb[TCA_CAKE_SCE]))
-			q->rate_flags |= CAKE_FLAG_SCE;
-		else
-			q->rate_flags &= ~CAKE_FLAG_SCE;
-	}
-
 	if (q->tins) {
 		sch_tree_lock(sch);
 		cake_reconfigure(sch);
@@ -3017,14 +2934,6 @@ static int cake_dump(struct Qdisc *sch, struct sk_buff *skb)
 	if (nla_put_u32(skb, TCA_CAKE_FWMARK, q->fwmark_mask))
 		goto nla_put_failure;
 
-	if (nla_put_u32(skb, TCA_CAKE_FWMARK_STORE,
-			!!(q->rate_flags & CAKE_FLAG_STORE_MARK)))
-		goto nla_put_failure;
-
-	if (nla_put_u32(skb, TCA_CAKE_SCE,
-			!!(q->rate_flags & CAKE_FLAG_SCE)))
-		goto nla_put_failure;
-
 	return nla_nest_end(skb, opts);
 
 nla_put_failure:
@@ -3116,8 +3025,6 @@ static int cake_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 		PUT_TSTAT_U32(MAX_SKBLEN, b->max_skblen);
 
 		PUT_TSTAT_U32(FLOW_QUANTUM, b->flow_quantum);
-
-		PUT_TSTAT_U32(SCE_MARKED_PACKETS, b->tin_sce_mark);
 		nla_nest_end(d->skb, ts);
 	}
 
