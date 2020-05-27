@@ -333,6 +333,17 @@ static const u8 diffserv8[] = {
 	7, 2, 2, 2, 2, 2, 2, 2,
 };
 
+static const u8 diffserv5[] = {
+	0, 1, 0, 0, 3, 0, 0, 0,
+	2, 0, 0, 0, 0, 0, 0, 0,
+	3, 0, 3, 0, 3, 0, 3, 0,
+	3, 0, 3, 0, 3, 0, 3, 0,
+	4, 0, 3, 0, 3, 0, 3, 0,
+	4, 0, 0, 0, 4, 0, 4, 0,
+	4, 0, 0, 0, 0, 0, 0, 0,
+	4, 0, 0, 0, 0, 0, 0, 0,
+};
+
 static const u8 diffserv4[] = {
 	0, 1, 0, 0, 2, 0, 0, 0,
 	1, 0, 0, 0, 0, 0, 0, 0,
@@ -370,6 +381,7 @@ static const u8 besteffort[] = {
 
 static const u8 normal_order[] = {0, 1, 2, 3, 4, 5, 6, 7};
 static const u8 bulk_order[] = {1, 0, 2, 3};
+static const u8 le_order[] = {1, 2, 0, 3, 4};
 
 #define REC_INV_SQRT_CACHE (16)
 static u32 cobalt_rec_inv_sqrt_cache[REC_INV_SQRT_CACHE] = {0};
@@ -2563,6 +2575,52 @@ static int cake_config_diffserv8(struct Qdisc *sch)
 	return 0;
 }
 
+static int cake_config_diffserv5(struct Qdisc *sch)
+{
+/*  Further pruned list of traffic classes for five-class system:
+ *
+ *	    Latency Sensitive  (CS7, CS6, EF, VA, CS5, CS4)
+ *	    Streaming Media    (AF4x, AF3x, CS3, AF2x, TOS4, CS2, TOS1)
+ *	    Best Effort        (CS0, AF1x, TOS2, and those not specified)
+ *	    Background Traffic (CS1)
+ *	    Least Effort       (LE)
+ *
+ *		Total 5 traffic classes.
+ */
+
+	struct cake_sched_data *q = qdisc_priv(sch);
+	u32 mtu = psched_mtu(qdisc_dev(sch));
+	u64 rate = q->rate_bps;
+	u32 quantum = 1024;
+
+	q->tin_cnt = 5;
+
+	/* codepoint to class mapping */
+	q->tin_index = diffserv5;
+	q->tin_order = le_order;
+
+	/* class characteristics */
+	cake_set_rate(&q->tins[0], rate, mtu,
+		      us_to_ns(q->target), us_to_ns(q->interval));
+	cake_set_rate(&q->tins[1], rate >> 6, mtu,
+		      us_to_ns(q->target), us_to_ns(q->interval));
+	cake_set_rate(&q->tins[2], rate >> 4, mtu,
+		      us_to_ns(q->target), us_to_ns(q->interval));
+	cake_set_rate(&q->tins[3], rate >> 1, mtu,
+		      us_to_ns(q->target), us_to_ns(q->interval));
+	cake_set_rate(&q->tins[4], rate >> 2, mtu,
+		      us_to_ns(q->target), us_to_ns(q->interval));
+
+	/* bandwidth-sharing weights */
+	q->tins[0].tin_quantum = quantum;	/*BE*/
+	q->tins[1].tin_quantum = quantum >> 6;	/*LE*/
+	q->tins[2].tin_quantum = quantum >> 4;	/*BK*/
+	q->tins[3].tin_quantum = quantum >> 1;	/*VI*/
+	q->tins[4].tin_quantum = quantum >> 2;	/*VO*/
+
+	return 0;
+}
+
 static int cake_config_diffserv4(struct Qdisc *sch)
 {
 /*  Further pruned list of traffic classes for four-class system:
@@ -2655,6 +2713,10 @@ static void cake_reconfigure(struct Qdisc *sch)
 
 	case CAKE_DIFFSERV_DIFFSERV8:
 		ft = cake_config_diffserv8(sch);
+		break;
+
+	case CAKE_DIFFSERV_DIFFSERV5:
+		ft = cake_config_diffserv5(sch);
 		break;
 
 	case CAKE_DIFFSERV_DIFFSERV4:
