@@ -134,7 +134,7 @@ not in 3.17
 3.18.37
 not in 3.19
 not in 4.0
-4.1.27 onward
+4.1.28 onward
 not in 4.2
 not in 4.3
 4.4.11 onward
@@ -142,7 +142,7 @@ not in 4.3
  */
 #if ((KERNEL_VERSION(3,  0, 0) <= LINUX_VERSION_CODE) && (KERNEL_VERSION(3, 16, 37) > LINUX_VERSION_CODE)) || \
     ((KERNEL_VERSION(3, 18, 0) <= LINUX_VERSION_CODE) && (KERNEL_VERSION(3, 18, 37) > LINUX_VERSION_CODE)) || \
-    ((KERNEL_VERSION(4,  1, 0) <= LINUX_VERSION_CODE) && (KERNEL_VERSION(4,  1, 27) > LINUX_VERSION_CODE)) || \
+    ((KERNEL_VERSION(4,  1, 0) <= LINUX_VERSION_CODE) && (KERNEL_VERSION(4,  1, 28) > LINUX_VERSION_CODE)) || \
     ((KERNEL_VERSION(4,  4, 0) <= LINUX_VERSION_CODE) && (KERNEL_VERSION(4,  4, 11) > LINUX_VERSION_CODE)) || \
     ((KERNEL_VERSION(4,  5, 0) <= LINUX_VERSION_CODE) && (KERNEL_VERSION(4,  5,  5) > LINUX_VERSION_CODE))
 #define qdisc_tree_reduce_backlog(_a, _b, _c) qdisc_tree_decrease_qlen(_a, _b)
