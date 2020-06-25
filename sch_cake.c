@@ -1386,7 +1386,8 @@ static struct sk_buff *cake_ack_filter(struct cake_sched_data *q,
 	 * packet is consecutive with the eligible ACK, and their flags match.
 	 */
 	if (elig_ack && aggressive && elig_ack->next == skb &&
-	    (elig_flags == (tcp_flag_word(tcph) & (TCP_FLAG_ECE | TCP_FLAG_CWR))))
+	    (elig_flags == (tcp_flag_word(tcph) &
+			    (TCP_FLAG_ECE | TCP_FLAG_CWR))))
 		goto found;
 
 	return NULL;
@@ -1670,7 +1671,6 @@ static u8 cake_handle_diffserv(struct sk_buff *skb, u16 wash)
 	switch (cake_skb_proto(skb)) {
 	case htons(ETH_P_IP):
 		buf = skb_header_pointer(skb, offset, sizeof(buf_), &buf_);
-
 		if (unlikely(!buf))
 			return 0;
 
@@ -1691,7 +1691,6 @@ static u8 cake_handle_diffserv(struct sk_buff *skb, u16 wash)
 
 	case htons(ETH_P_IPV6):
 		buf = skb_header_pointer(skb, offset, sizeof(buf_), &buf_);
-
 		if (unlikely(!buf))
 			return 0;
 
@@ -2115,8 +2114,9 @@ begin:
 				b = q->tins;
 
 				if (wrapped) {
-					/* It's possible for q->qlen to be nonzero when
-					 * we actually have no packets anywhere.
+					/* It's possible for q->qlen to be
+					 * nonzero when we actually have no
+					 * packets anywhere.
 					 */
 					if (empty)
 						return NULL;
@@ -2740,9 +2740,9 @@ static int cake_change(struct Qdisc *sch, struct nlattr *opt,
 	}
 
 	if (tb[TCA_CAKE_FLOW_MODE])
-		q->flow_mode = (q->flow_mode & CAKE_FLOW_NAT_FLAG) |
-			(nla_get_u32(tb[TCA_CAKE_FLOW_MODE]) &
-				~CAKE_FLOW_NAT_FLAG);
+		q->flow_mode = ((q->flow_mode & CAKE_FLOW_NAT_FLAG) |
+				(nla_get_u32(tb[TCA_CAKE_FLOW_MODE]) &
+					CAKE_FLOW_MASK));
 
 	if (tb[TCA_CAKE_ATM])
 		q->atm_mode = nla_get_u32(tb[TCA_CAKE_ATM]);
