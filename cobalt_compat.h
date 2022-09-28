@@ -95,6 +95,10 @@ static inline unsigned int __tcp_hdrlen(const struct tcphdr *th)
 }
 #endif
 
+#if KERNEL_VERSION(4, 5, 0) > LINUX_VERSION_CODE
+#define IP6_ECN_set_ce(_a, _b) IP6_ECN_set_ce(_b)
+#endif
+
 #if KERNEL_VERSION(4, 6, 0) > LINUX_VERSION_CODE
 static inline int skb_try_make_writable(struct sk_buff *skb,
 					unsigned int write_len)
