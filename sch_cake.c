@@ -2185,11 +2185,9 @@ retry:
 
 	/* collect delay stats */
 	delay = ktime_to_ns(ktime_sub(now, cobalt_get_enqueue_time(skb)));
-	b->avge_delay = cake_ewma(b->avge_delay, delay, 8);
-	b->peak_delay = cake_ewma(b->peak_delay, delay,
-				  delay > b->peak_delay ? 2 : 8);
-	b->base_delay = cake_ewma(b->base_delay, delay,
-				  delay < b->base_delay ? 2 : 8);
+	b->avge_delay = b->avge_delay >= delay ? b->avge_delay : delay; 
+	b->peak_delay = b->peak_delay >= delay ? b->peak_delay : delay;
+	b->base_delay = b->base_delay >= delay ? b->base_delay : delay;
 
 	len = cake_advance_shaper(q, b, skb, now, false);
 	flow->deficit -= len;
@@ -2913,12 +2911,14 @@ static int cake_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 		PUT_TSTAT_U32(ECN_MARKED_PACKETS, b->tin_ecn_mark);
 		PUT_TSTAT_U32(ACKS_DROPPED_PACKETS, b->ack_drops);
 
+		/* drain the delay counters */
 		PUT_TSTAT_U32(PEAK_DELAY_US,
 			      ktime_to_us(ns_to_ktime(b->peak_delay)));
 		PUT_TSTAT_U32(AVG_DELAY_US,
 			      ktime_to_us(ns_to_ktime(b->avge_delay)));
 		PUT_TSTAT_U32(BASE_DELAY_US,
 			      ktime_to_us(ns_to_ktime(b->base_delay)));
+		b->peak_delay = b->avge_delay = b-> base_delay = 0;
 
 		PUT_TSTAT_U32(WAY_INDIRECT_HITS, b->way_hits);
 		PUT_TSTAT_U32(WAY_MISSES, b->way_misses);
