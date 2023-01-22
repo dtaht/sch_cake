@@ -64,22 +64,14 @@
 #include <linux/vmalloc.h>
 #include <linux/reciprocal_div.h>
 #include <net/netlink.h>
-#include <linux/version.h>
-#include "pkt_sched.h"
-#include <net/pkt_cls.h>
 #include <linux/if_vlan.h>
+#include <net/pkt_sched.h>
+#include <net/pkt_cls.h>
 #include <net/tcp.h>
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 2, 0)
-#include <net/flow_keys.h>
-#else
 #include <net/flow_dissector.h>
-#endif
-#include "cobalt_compat.h"
 
-#if IS_REACHABLE(CONFIG_NF_CONNTRACK)
+#if IS_ENABLED(CONFIG_NF_CONNTRACK)
 #include <net/netfilter/nf_conntrack_core.h>
-#include <net/netfilter/nf_conntrack_zones.h>
-#include <net/netfilter/nf_conntrack.h>
 #endif
 
 #define CAKE_SET_WAYS (8)
@@ -160,7 +152,6 @@ struct cake_tin_data {
 	u32	tags[CAKE_QUEUES]; /* for set association */
 	u16	overflow_idx[CAKE_QUEUES];
 	struct cake_host hosts[CAKE_QUEUES]; /* for triple isolation */
-	u32	perturb;
 	u16	flow_quantum;
 
 	struct cobalt_params cparams;
@@ -207,9 +198,7 @@ struct cake_tin_data {
 
 struct cake_sched_data {
 	struct tcf_proto __rcu *filter_list; /* optional external classifier */
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 13, 0)
 	struct tcf_block *block;
-#endif
 	struct cake_tin_data *tins;
 
 	struct cake_heap_entry overflow_heap[CAKE_QUEUES * CAKE_MAX_TINS];
@@ -508,52 +497,6 @@ static bool cobalt_queue_empty(struct cobalt_vars *vars,
 	return down;
 }
 
-static __be16 cake_skb_proto(const struct sk_buff *skb)
-{
-	unsigned int offset = skb_mac_offset(skb) + sizeof(struct ethhdr);
-	__be16 proto = skb->protocol;
-	struct vlan_hdr vhdr, *vh;
-
-	while (proto == htons(ETH_P_8021Q) || proto == htons(ETH_P_8021AD)) {
-		vh = skb_header_pointer(skb, offset, sizeof(vhdr), &vhdr);
-		if (!vh)
-			break;
-
-		proto = vh->h_vlan_encapsulated_proto;
-		offset += sizeof(vhdr);
-	}
-
-	return proto;
-}
-
-static int cake_set_ce(struct sk_buff *skb)
-{
-	int wlen = skb_network_offset(skb);
-
-	switch (cake_skb_proto(skb)) {
-	case htons(ETH_P_IP):
-		wlen += sizeof(struct iphdr);
-		if (!pskb_may_pull(skb, wlen) ||
-		    skb_try_make_writable(skb, wlen))
-			return 0;
-
-		return IP_ECN_set_ce(ip_hdr(skb));
-
-	case htons(ETH_P_IPV6):
-		wlen += sizeof(struct ipv6hdr);
-		if (!pskb_may_pull(skb, wlen) ||
-		    skb_try_make_writable(skb, wlen))
-			return 0;
-
-		return IP6_ECN_set_ce(skb, ipv6_hdr(skb));
-
-	default:
-		return 0;
-	}
-
-	return 0;
-}
-
 /* Call this with a freshly dequeued packet for possible congestion marking.
  * Returns true as an instruction to drop the packet, false for delivery.
  */
@@ -606,7 +549,7 @@ static bool cobalt_should_drop(struct cobalt_vars *vars,
 
 	if (next_due && vars->dropping) {
 		/* Use ECN mark if possible, otherwise drop */
-		drop = !(vars->ecn_marked = cake_set_ce(skb));
+		drop = !(vars->ecn_marked = INET_ECN_set_ce(skb));
 
 		vars->count++;
 		if (!vars->count)
@@ -641,82 +584,50 @@ static bool cobalt_should_drop(struct cobalt_vars *vars,
 	return drop;
 }
 
-#if IS_REACHABLE(CONFIG_NF_CONNTRACK)
-
-static void cake_update_flowkeys(struct flow_keys *keys,
+static bool cake_update_flowkeys(struct flow_keys *keys,
 				 const struct sk_buff *skb)
 {
-	const struct nf_conntrack_tuple *tuple;
-	enum ip_conntrack_info ctinfo;
-	struct nf_conn *ct;
-	bool rev = false;
+#if IS_ENABLED(CONFIG_NF_CONNTRACK)
+	struct nf_conntrack_tuple tuple = {};
+	bool rev = !skb->_nfct, upd = false;
+	__be32 ip;
 
-	if (cake_skb_proto(skb) != htons(ETH_P_IP))
-		return;
+	if (skb_protocol(skb, true) != htons(ETH_P_IP))
+		return false;
 
-	ct = nf_ct_get(skb, &ctinfo);
-	if (ct) {
-		tuple = nf_ct_tuple(ct, CTINFO2DIR(ctinfo));
-	} else {
-		const struct nf_conntrack_tuple_hash *hash;
-		struct nf_conntrack_tuple srctuple;
+	if (!nf_ct_get_tuple_skb(&tuple, skb))
+		return false;
 
-#if KERNEL_VERSION(4, 4, 0) > LINUX_VERSION_CODE
-		if (!nf_ct_get_tuplepr(skb, skb_network_offset(skb),
-				       NFPROTO_IPV4, &srctuple))
-#else
-		if (!nf_ct_get_tuplepr(skb, skb_network_offset(skb),
-				       NFPROTO_IPV4, dev_net(skb->dev),
-				       &srctuple))
-#endif
-			return;
-
-#if KERNEL_VERSION(4, 3, 0) > LINUX_VERSION_CODE
-		hash = nf_conntrack_find_get(dev_net(skb->dev),
-					     NF_CT_DEFAULT_ZONE,
-					     &srctuple);
-#else
-		hash = nf_conntrack_find_get(dev_net(skb->dev),
-					     &nf_ct_zone_dflt,
-					     &srctuple);
-#endif
-		if (!hash)
-			return;
-
-		rev = true;
-		ct = nf_ct_tuplehash_to_ctrack(hash);
-		tuple = nf_ct_tuple(ct, !hash->tuple.dst.dir);
+	ip = rev ? tuple.dst.u3.ip : tuple.src.u3.ip;
+	if (ip != keys->addrs.v4addrs.src) {
+		keys->addrs.v4addrs.src = ip;
+		upd = true;
+	}
+	ip = rev ? tuple.src.u3.ip : tuple.dst.u3.ip;
+	if (ip != keys->addrs.v4addrs.dst) {
+		keys->addrs.v4addrs.dst = ip;
+		upd = true;
 	}
 
-#if KERNEL_VERSION(4, 2, 0) > LINUX_VERSION_CODE
-	keys->src = rev ? tuple->dst.u3.ip : tuple->src.u3.ip;
-	keys->dst = rev ? tuple->src.u3.ip : tuple->dst.u3.ip;
-#else
-	keys->addrs.v4addrs.src = rev ? tuple->dst.u3.ip : tuple->src.u3.ip;
-	keys->addrs.v4addrs.dst = rev ? tuple->src.u3.ip : tuple->dst.u3.ip;
-#endif
-
-#if KERNEL_VERSION(4, 2, 0) > LINUX_VERSION_CODE
-	if (keys->ports) {
-		keys->port16[0] = rev ? tuple->dst.u.all : tuple->src.u.all;
-		keys->port16[1] = rev ? tuple->src.u.all : tuple->dst.u.all;
-	}
-#else
 	if (keys->ports.ports) {
-		keys->ports.src = rev ? tuple->dst.u.all : tuple->src.u.all;
-		keys->ports.dst = rev ? tuple->src.u.all : tuple->dst.u.all;
+		__be16 port;
+
+		port = rev ? tuple.dst.u.all : tuple.src.u.all;
+		if (port != keys->ports.src) {
+			keys->ports.src = port;
+			upd = true;
+		}
+		port = rev ? tuple.src.u.all : tuple.dst.u.all;
+		if (port != keys->ports.dst) {
+			port = keys->ports.dst;
+			upd = true;
+		}
 	}
-#endif
-	if (rev)
-		nf_ct_put(ct);
-}
+	return upd;
 #else
-static void cake_update_flowkeys(struct flow_keys *keys,
-				 const struct sk_buff *skb)
-{
-	/* There is nothing we can do here without CONNTRACK */
-}
+	return false;
 #endif
+}
 
 /* Cake has several subtle multiple bit settings. In these cases you
  *  would be matching triple isolate mode as well.
@@ -735,48 +646,36 @@ static bool cake_ddst(int flow_mode)
 static u32 cake_hash(struct cake_tin_data *q, const struct sk_buff *skb,
 		     int flow_mode, u16 flow_override, u16 host_override)
 {
+	bool hash_flows = (!flow_override && !!(flow_mode & CAKE_FLOW_FLOWS));
+	bool hash_hosts = (!host_override && !!(flow_mode & CAKE_FLOW_HOSTS));
+	bool nat_enabled = !!(flow_mode & CAKE_FLOW_NAT_FLAG);
 	u32 flow_hash = 0, srchost_hash = 0, dsthost_hash = 0;
 	u16 reduced_hash, srchost_idx, dsthost_idx;
-#if KERNEL_VERSION(4, 2, 0) > LINUX_VERSION_CODE
-	struct flow_keys keys;
-#else
 	struct flow_keys keys, host_keys;
-#endif
+	bool use_skbhash = skb->l4_hash;
 
 	if (unlikely(flow_mode == CAKE_FLOW_NONE))
 		return 0;
 
-	/* If both overrides are set we can skip packet dissection entirely */
-	if ((flow_override || !(flow_mode & CAKE_FLOW_FLOWS)) &&
-	    (host_override || !(flow_mode & CAKE_FLOW_HOSTS)))
+	/* If both overrides are set, or we can use the SKB hash and nat mode is
+	 * disabled, we can skip packet dissection entirely. If nat mode is
+	 * enabled there's another check below after doing the conntrack lookup.
+	 */
+	if ((!hash_flows || (use_skbhash && !nat_enabled)) && !hash_hosts)
 		goto skip_hash;
 
-#if KERNEL_VERSION(4, 2, 0) > LINUX_VERSION_CODE
-	skb_flow_dissect(skb, &keys);
-
-	if (flow_mode & CAKE_FLOW_NAT_FLAG)
-		cake_update_flowkeys(&keys, skb);
-
-	srchost_hash = jhash_1word((__force u32)keys.src, q->perturb);
-	dsthost_hash = jhash_1word((__force u32)keys.dst, q->perturb);
-
-	if (flow_mode & CAKE_FLOW_FLOWS)
-		flow_hash = jhash_3words((__force u32)keys.dst, (__force u32)keys.src ^ keys.ip_proto, (__force u32)keys.ports, q->perturb);
-
-#else
-
-/* Linux kernel 4.2.x have skb_flow_dissect_flow_keys which takes only 2
- * arguments
- */
-#if (KERNEL_VERSION(4, 2, 0) <= LINUX_VERSION_CODE) && (KERNEL_VERSION(4, 3, 0) >  LINUX_VERSION_CODE)
-	skb_flow_dissect_flow_keys(skb, &keys);
-#else
 	skb_flow_dissect_flow_keys(skb, &keys,
 				   FLOW_DISSECTOR_F_STOP_AT_FLOW_LABEL);
-#endif
 
-	if (flow_mode & CAKE_FLOW_NAT_FLAG)
-		cake_update_flowkeys(&keys, skb);
+	/* Don't use the SKB hash if we change the lookup keys from conntrack */
+	if (nat_enabled && cake_update_flowkeys(&keys, skb))
+		use_skbhash = false;
+
+	/* If we can still use the SKB hash and don't need the host hash, we can
+	 * skip the rest of the hashing procedure
+	 */
+	if (use_skbhash && !hash_hosts)
+		goto skip_hash;
 
 	/* flow_hash_from_keys() sorts the addresses by value, so we have
 	 * to preserve their order in a separate data structure to treat
@@ -786,9 +685,6 @@ static u32 cake_hash(struct cake_tin_data *q, const struct sk_buff *skb,
 	host_keys.ports.ports     = 0;
 	host_keys.basic.ip_proto  = 0;
 	host_keys.keyid.keyid     = 0;
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 8, 0)
-	host_keys.tags.vlan_id    = 0;
-#endif
 	host_keys.tags.flow_label = 0;
 
 	switch (host_keys.control.addr_type) {
@@ -818,13 +714,14 @@ static u32 cake_hash(struct cake_tin_data *q, const struct sk_buff *skb,
 	/* This *must* be after the above switch, since as a
 	 * side-effect it sorts the src and dst addresses.
 	 */
-	if (flow_mode & CAKE_FLOW_FLOWS)
+	if (hash_flows && !use_skbhash)
 		flow_hash = flow_hash_from_keys(&keys);
-#endif
 
 skip_hash:
 	if (flow_override)
 		flow_hash = flow_override - 1;
+	else if (use_skbhash && (flow_mode & CAKE_FLOW_FLOWS))
+		flow_hash = skb->hash;
 	if (host_override) {
 		dsthost_hash = host_override - 1;
 		srchost_hash = host_override - 1;
@@ -958,7 +855,7 @@ static struct sk_buff *dequeue_head(struct cake_flow *flow)
 
 	if (skb) {
 		flow->head = skb->next;
-		skb->next = NULL;
+		skb_mark_not_on_list(skb);
 	}
 
 	return skb;
@@ -1046,7 +943,7 @@ static struct tcphdr *cake_get_tcphdr(const struct sk_buff *skb,
 	}
 
 	tcph = skb_header_pointer(skb, offset, sizeof(_tcph), &_tcph);
-	if (!tcph)
+	if (!tcph || tcph->doff < 5)
 		return NULL;
 
 	return skb_header_pointer(skb, offset,
@@ -1402,7 +1299,7 @@ found:
 	else
 		flow->head = elig_ack->next;
 
-	elig_ack->next = NULL;
+	skb_mark_not_on_list(elig_ack);
 
 	return elig_ack;
 }
@@ -1601,11 +1498,7 @@ static int cake_advance_shaper(struct cake_sched_data *q,
 	return len;
 }
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 8, 0)
-static unsigned int cake_drop(struct Qdisc *sch)
-#else
 static unsigned int cake_drop(struct Qdisc *sch, struct sk_buff **to_free)
-#endif
 {
 	struct cake_sched_data *q = qdisc_priv(sch);
 	ktime_t now = ktime_get();
@@ -1654,11 +1547,7 @@ static unsigned int cake_drop(struct Qdisc *sch, struct sk_buff **to_free)
 	if (q->rate_flags & CAKE_FLAG_INGRESS)
 		cake_advance_shaper(q, b, skb, now, true);
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 8, 0)
-	kfree_skb(skb);
-#else
 	__qdisc_drop(skb, to_free);
-#endif
 	sch->q.qlen--;
 
 	cake_heapify(q, 0);
@@ -1672,7 +1561,7 @@ static u8 cake_handle_diffserv(struct sk_buff *skb, bool wash)
 	u16 *buf, buf_;
 	u8 dscp;
 
-	switch (cake_skb_proto(skb)) {
+	switch (skb_protocol(skb, true)) {
 	case htons(ETH_P_IP):
 		buf = skb_header_pointer(skb, offset, sizeof(buf_), &buf_);
 		if (unlikely(!buf))
@@ -1776,18 +1665,16 @@ static u32 cake_classify(struct Qdisc *sch, struct cake_tin_data **t,
 		goto hash;
 
 	*qerr = NET_XMIT_SUCCESS | __NET_XMIT_BYPASS;
-	result = tcf_classify(skb, filter, &res, false);
+	result = tcf_classify(skb, NULL, filter, &res, false);
 
 	if (result >= 0) {
 #ifdef CONFIG_NET_CLS_ACT
 		switch (result) {
 		case TC_ACT_STOLEN:
 		case TC_ACT_QUEUED:
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 13, 0)
 		case TC_ACT_TRAP:
-#endif
 			*qerr = NET_XMIT_SUCCESS | __NET_XMIT_STOLEN;
-			/* fall through */
+			fallthrough;
 		case TC_ACT_SHOT:
 			return 0;
 		}
@@ -1804,16 +1691,12 @@ hash:
 
 static void cake_reconfigure(struct Qdisc *sch);
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 8, 0)
-static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch)
-#else
 static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 			struct sk_buff **to_free)
-#endif
 {
 	struct cake_sched_data *q = qdisc_priv(sch);
 	int len = qdisc_pkt_len(skb);
-	int uninitialized_var(ret);
+	int ret;
 	struct sk_buff *ack = NULL;
 	ktime_t now = ktime_get();
 	struct cake_tin_data *b;
@@ -1825,11 +1708,7 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 	if (idx == 0) {
 		if (ret & __NET_XMIT_BYPASS)
 			qdisc_qstats_drop(sch);
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 8, 0)
-		kfree_skb(skb);
-#else
 		__qdisc_drop(skb, to_free);
-#endif
 		return ret;
 	}
 	idx--;
@@ -1866,15 +1745,10 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 
 		segs = skb_gso_segment(skb, features & ~NETIF_F_GSO_MASK);
 		if (IS_ERR_OR_NULL(segs))
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 8, 0)
-			return qdisc_reshape_fail(skb, sch);
-#else
 			return qdisc_drop(skb, sch, to_free);
-#endif
 
-		while (segs) {
-			nskb = segs->next;
-			segs->next = NULL;
+		skb_list_walk_safe(segs, segs, nskb) {
+			skb_mark_not_on_list(segs);
 			qdisc_skb_cb(segs)->pkt_len = segs->len;
 			cobalt_set_enqueue_time(segs, now);
 			get_cobalt_cb(segs)->adjusted_len = cake_overhead(q,
@@ -1886,7 +1760,6 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 			slen += segs->len;
 			q->buffer_used += segs->truesize;
 			b->packets++;
-			segs = nskb;
 		}
 
 		/* stats */
@@ -2027,11 +1900,7 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 
 		while (q->buffer_used > q->buffer_limit) {
 			dropped++;
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 8, 0)
-			cake_drop(sch);
-#else
 			cake_drop(sch, to_free);
-#endif
 		}
 		b->drop_overlimit += dropped;
 	}
@@ -2139,7 +2008,7 @@ begin:
 		 * - Highest-priority tin with queue and meeting schedule, or
 		 * - The earliest-scheduled tin with queue.
 		 */
-		ktime_t best_time = ns_to_ktime(KTIME_MAX);
+		ktime_t best_time = KTIME_MAX;
 		int tin, best_tin = 0;
 
 		for (tin = 0; tin < q->tin_cnt; tin++) {
@@ -2305,12 +2174,8 @@ retry:
 		flow->dropped++;
 		b->tin_dropped++;
 		qdisc_tree_reduce_backlog(sch, 1, qdisc_pkt_len(skb));
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 8, 0)
-		qdisc_drop(skb, sch);
-#else
 		qdisc_qstats_drop(sch);
 		kfree_skb(skb);
-#endif
 		if (q->rate_flags & CAKE_FLAG_INGRESS)
 			goto retry;
 	}
@@ -2477,7 +2342,7 @@ static int cake_config_precedence(struct Qdisc *sch)
 
 /*	List of known Diffserv codepoints:
  *
- *	Least Effort (CS1)
+ *	Least Effort (CS1, LE)
  *	Best Effort (CS0)
  *	Max Reliability & LLT "Lo" (TOS1)
  *	Max Throughput (TOS2)
@@ -2499,7 +2364,7 @@ static int cake_config_precedence(struct Qdisc *sch)
  *	Total 25 codepoints.
  */
 
-/*	List of traffic classes in RFC 4594:
+/*	List of traffic classes in RFC 4594, updated by RFC 8622:
  *		(roughly descending order of contended priority)
  *		(roughly ascending order of uncontended throughput)
  *
@@ -2514,7 +2379,7 @@ static int cake_config_precedence(struct Qdisc *sch)
  *	Ops, Admin, Management (CS2,TOS1) - eg. ssh
  *	Standard Service (CS0 & unrecognised codepoints)
  *	High Throughput Data (AF1x,TOS2)  - eg. web traffic
- *	Low Priority Data (CS1)           - eg. BitTorrent
+ *	Low Priority Data (CS1,LE)        - eg. BitTorrent
 
  *	Total 12 traffic classes.
  */
@@ -2530,7 +2395,7 @@ static int cake_config_diffserv8(struct Qdisc *sch)
  *		Video Streaming          (AF4x, AF3x, CS3)
  *		Bog Standard             (CS0 etc.)
  *		High Throughput          (AF1x, TOS2)
- *		Background Traffic       (CS1)
+ *		Background Traffic       (CS1, LE)
  *
  *		Total 8 traffic classes.
  */
@@ -2574,7 +2439,7 @@ static int cake_config_diffserv4(struct Qdisc *sch)
  *	    Latency Sensitive  (CS7, CS6, EF, VA, CS5, CS4)
  *	    Streaming Media    (AF4x, AF3x, CS3, AF2x, TOS4, CS2, TOS1)
  *	    Best Effort        (CS0, AF1x, TOS2, and those not specified)
- *	    Background Traffic (CS1)
+ *	    Background Traffic (CS1, LE)
  *
  *		Total 4 traffic classes.
  */
@@ -2612,7 +2477,7 @@ static int cake_config_diffserv4(struct Qdisc *sch)
 static int cake_config_diffserv3(struct Qdisc *sch)
 {
 /*  Simplified Diffserv structure with 3 tins.
- *		Low Priority		(CS1)
+ *		Low Priority		(CS1, LE)
  *		Best Effort
  *		Latency Sensitive	(TOS4, VA, EF, CS6, CS7)
  */
@@ -2697,12 +2562,8 @@ static void cake_reconfigure(struct Qdisc *sch)
 				  q->buffer_config_limit));
 }
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 16, 0)
-static int cake_change(struct Qdisc *sch, struct nlattr *opt)
-#else
 static int cake_change(struct Qdisc *sch, struct nlattr *opt,
-		struct netlink_ext_ack *extack)
-#endif
+		       struct netlink_ext_ack *extack)
 {
 	struct cake_sched_data *q = qdisc_priv(sch);
 	struct nlattr *tb[TCA_CAKE_MAX + 1];
@@ -2711,26 +2572,19 @@ static int cake_change(struct Qdisc *sch, struct nlattr *opt,
 	if (!opt)
 		return -EINVAL;
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 12, 0)
-	err = nla_parse_nested(tb, TCA_CAKE_MAX, opt, cake_policy);
-#elif LINUX_VERSION_CODE < KERNEL_VERSION(4, 16, 0)
-	err = nla_parse_nested(tb, TCA_CAKE_MAX, opt, cake_policy, NULL);
-#else
-	err = nla_parse_nested(tb, TCA_CAKE_MAX, opt, cake_policy, extack);
-#endif
+	err = nla_parse_nested_deprecated(tb, TCA_CAKE_MAX, opt, cake_policy,
+					  extack);
 	if (err < 0)
 		return err;
 
 	if (tb[TCA_CAKE_NAT]) {
-#if IS_REACHABLE(CONFIG_NF_CONNTRACK)
+#if IS_ENABLED(CONFIG_NF_CONNTRACK)
 		q->flow_mode &= ~CAKE_FLOW_NAT_FLAG;
 		q->flow_mode |= CAKE_FLOW_NAT_FLAG *
 			!!nla_get_u32(tb[TCA_CAKE_NAT]);
 #else
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 16, 0)
 		NL_SET_ERR_MSG_ATTR(extack, tb[TCA_CAKE_NAT],
 				    "No conntrack support in kernel");
-#endif
 		return -EOPNOTSUPP;
 #endif
 	}
@@ -2838,20 +2692,12 @@ static void cake_destroy(struct Qdisc *sch)
 	struct cake_sched_data *q = qdisc_priv(sch);
 
 	qdisc_watchdog_cancel(&q->watchdog);
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 13, 0)
-	tcf_destroy_chain(&q->filter_list);
-#else
 	tcf_block_put(q->block);
-#endif
 	kvfree(q->tins);
 }
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 16, 0)
-static int cake_init(struct Qdisc *sch, struct nlattr *opt)
-#else
 static int cake_init(struct Qdisc *sch, struct nlattr *opt,
-		struct netlink_ext_ack *extack)
-#endif
+		     struct netlink_ext_ack *extack)
 {
 	struct cake_sched_data *q = qdisc_priv(sch);
 	int i, j, err;
@@ -2873,33 +2719,21 @@ static int cake_init(struct Qdisc *sch, struct nlattr *opt,
 	qdisc_watchdog_init(&q->watchdog, sch);
 
 	if (opt) {
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 16, 0)
-		err = cake_change(sch, opt);
-#else
 		err = cake_change(sch, opt, extack);
-#endif
 
 		if (err)
 			return err;
 	}
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 13, 0)
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 15, 0)
-	err = tcf_block_get(&q->block, &q->filter_list);
-#elif LINUX_VERSION_CODE < KERNEL_VERSION(4, 16, 0)
-	err = tcf_block_get(&q->block, &q->filter_list, sch);
-#else
 	err = tcf_block_get(&q->block, &q->filter_list, sch, extack);
-#endif
 	if (err)
 		return err;
-#endif
 
 	quantum_div[0] = ~0;
 	for (i = 1; i <= CAKE_QUEUES; i++)
 		quantum_div[i] = 65535 / i;
 
-	q->tins = kvzalloc(CAKE_MAX_TINS * sizeof(struct cake_tin_data),
+	q->tins = kvcalloc(CAKE_MAX_TINS, sizeof(struct cake_tin_data),
 			   GFP_KERNEL);
 	if (!q->tins)
 		goto nomem;
@@ -2907,7 +2741,6 @@ static int cake_init(struct Qdisc *sch, struct nlattr *opt,
 	for (i = 0; i < CAKE_MAX_TINS; i++) {
 		struct cake_tin_data *b = q->tins + i;
 
-		b->perturb = prandom_u32();
 		INIT_LIST_HEAD(&b->new_flows);
 		INIT_LIST_HEAD(&b->old_flows);
 		INIT_LIST_HEAD(&b->decaying_flows);
@@ -2944,7 +2777,7 @@ static int cake_dump(struct Qdisc *sch, struct sk_buff *skb)
 	struct cake_sched_data *q = qdisc_priv(sch);
 	struct nlattr *opts;
 
-	opts = nla_nest_start(skb, TCA_OPTIONS);
+	opts = nla_nest_start_noflag(skb, TCA_OPTIONS);
 	if (!opts)
 		goto nla_put_failure;
 
@@ -3015,7 +2848,7 @@ nla_put_failure:
 
 static int cake_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 {
-	struct nlattr *stats = nla_nest_start(d->skb, TCA_STATS_APP);
+	struct nlattr *stats = nla_nest_start_noflag(d->skb, TCA_STATS_APP);
 	struct cake_sched_data *q = qdisc_priv(sch);
 	struct nlattr *tstats, *ts;
 	int i;
@@ -3045,7 +2878,7 @@ static int cake_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 #undef PUT_STAT_U32
 #undef PUT_STAT_U64
 
-	tstats = nla_nest_start(d->skb, TCA_CAKE_STATS_TIN_STATS);
+	tstats = nla_nest_start_noflag(d->skb, TCA_CAKE_STATS_TIN_STATS);
 	if (!tstats)
 		goto nla_put_failure;
 
@@ -3062,7 +2895,7 @@ static int cake_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 	for (i = 0; i < q->tin_cnt; i++) {
 		struct cake_tin_data *b = &q->tins[q->tin_order[i]];
 
-		ts = nla_nest_start(d->skb, i + 1);
+		ts = nla_nest_start_noflag(d->skb, i + 1);
 		if (!ts)
 			goto nla_put_failure;
 
@@ -3109,9 +2942,6 @@ static int cake_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 
 nla_put_failure:
 	nla_nest_cancel(d->skb, stats);
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 8, 0)
-	sch_tree_unlock(sch);
-#endif
 	return -1;
 }
 
@@ -3135,26 +2965,14 @@ static void cake_unbind(struct Qdisc *q, unsigned long cl)
 {
 }
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 13, 0)
-static struct tcf_proto __rcu **cake_find_tcf(struct Qdisc *sch, unsigned long cl)
-#else
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 16, 0)
-static struct tcf_block *cake_tcf_block(struct Qdisc *sch, unsigned long cl)
-#else
 static struct tcf_block *cake_tcf_block(struct Qdisc *sch, unsigned long cl,
 					struct netlink_ext_ack *extack)
-#endif
-#endif
 {
 	struct cake_sched_data *q = qdisc_priv(sch);
 
 	if (cl)
 		return NULL;
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 13, 0)
-	return &q->filter_list;
-#else
 	return q->block;
-#endif
 }
 
 static int cake_dump_class(struct Qdisc *sch, unsigned long cl,
@@ -3181,13 +2999,13 @@ static int cake_dump_class_stats(struct Qdisc *sch, unsigned long cl,
 		flow = &b->flows[idx % CAKE_QUEUES];
 
 		if (flow->head) {
-			cake_maybe_lock(sch);
+			sch_tree_lock(sch);
 			skb = flow->head;
 			while (skb) {
 				qs.qlen++;
 				skb = skb->next;
 			}
-			cake_maybe_unlock(sch);
+			sch_tree_unlock(sch);
 		}
 		qs.backlog = b->backlogs[idx % CAKE_QUEUES];
 		qs.drops = flow->dropped;
@@ -3197,7 +3015,7 @@ static int cake_dump_class_stats(struct Qdisc *sch, unsigned long cl,
 	if (flow) {
 		ktime_t now = ktime_get();
 
-		stats = nla_nest_start(d->skb, TCA_STATS_APP);
+		stats = nla_nest_start_noflag(d->skb, TCA_STATS_APP);
 		if (!stats)
 			return -1;
 
@@ -3265,20 +3083,11 @@ static void cake_walk(struct Qdisc *sch, struct qdisc_walker *arg)
 }
 
 static const struct Qdisc_class_ops cake_class_ops = {
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 13, 0)
-	.tcf_chain	=	cake_find_tcf,
-#else
-	.tcf_block	=	cake_tcf_block,
-#endif
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0)
-	.get		=	cake_find,
-	.put		=	cake_unbind,
-#else
-	.find		=	cake_find,
-#endif
-	.unbind_tcf	=	cake_unbind,
-	.bind_tcf	=	cake_bind,
 	.leaf		=	cake_leaf,
+	.find		=	cake_find,
+	.tcf_block	=	cake_tcf_block,
+	.bind_tcf	=	cake_bind,
+	.unbind_tcf	=	cake_unbind,
 	.dump		=	cake_dump_class,
 	.dump_stats	=	cake_dump_class_stats,
 	.walk		=	cake_walk,
@@ -3291,9 +3100,6 @@ static struct Qdisc_ops cake_qdisc_ops __read_mostly = {
 	.enqueue	=	cake_enqueue,
 	.dequeue	=	cake_dequeue,
 	.peek		=	qdisc_peek_dequeued,
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 8, 0)
-	.drop		=	cake_drop,
-#endif
 	.init		=	cake_init,
 	.reset		=	cake_reset,
 	.destroy	=	cake_destroy,
